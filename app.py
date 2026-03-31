@@ -1,5 +1,6 @@
 """
-Katalyst Judgment Radar
+Katalyst Judgment Radar v3
+Comprehensive legal intelligence system with multiple source fetchers.
 """
 
 import os
@@ -12,6 +13,7 @@ import re
 import threading
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import quote
 
 import requests
 import feedparser
@@ -29,36 +31,23 @@ logger = logging.getLogger("radar")
 
 app = Flask(__name__)
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS judgments (
-            id TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            court TEXT,
-            date_decided TEXT,
-            date_fetched TEXT NOT NULL,
-            source TEXT NOT NULL,
-            source_url TEXT,
-            full_text_snippet TEXT,
-            categories TEXT,
-            sections TEXT,
-            relevance_score TEXT,
-            practitioner_note TEXT,
-            raw_classification TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS sweep_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sweep_time TEXT NOT NULL,
-            source TEXT NOT NULL,
-            results_fetched INTEGER,
-            results_relevant INTEGER,
-            errors TEXT
-        )
-    """)
+    conn.execute("""CREATE TABLE IF NOT EXISTS judgments (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, court TEXT,
+        date_decided TEXT, date_fetched TEXT NOT NULL, source TEXT NOT NULL,
+        source_url TEXT, full_text_snippet TEXT, categories TEXT,
+        sections TEXT, relevance_score TEXT, practitioner_note TEXT,
+        raw_classification TEXT)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS sweep_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, sweep_time TEXT NOT NULL,
+        source TEXT NOT NULL, results_fetched INTEGER,
+        results_relevant INTEGER, errors TEXT)""")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_date_fetched ON judgments(date_fetched)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_categories ON judgments(categories)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_relevance ON judgments(relevance_score)")
@@ -67,53 +56,50 @@ def init_db():
     logger.info("Database initialized at %s", DB_PATH)
 
 
-SEARCH_QUERIES = [
-    "scheme of arrangement section 230",
-    "scheme of arrangement section 232",
-    "amalgamation NCLT",
-    "demerger scheme NCLT",
+SEARCH_QUERIES_NARROW = [
+    "scheme of arrangement NCLT 2026",
+    "demerger scheme NCLT order 2026",
+    "amalgamation scheme NCLT 2026",
     "composite scheme demerger amalgamation",
-    "capital reduction section 66",
-    "appointed date scheme",
-    "NCLT scheme sanction",
-    "family arrangement settlement deed",
-    "family settlement transfer",
-    "Kale v Deputy Director family arrangement",
-    "family partition registration stamp duty",
-    "Hindu Succession Act section 6 coparcenary",
-    "family arrangement memorandum",
-    "section 2(19AA) demerger",
-    "section 47 exemption amalgamation",
-    "section 56(2)(x) deemed gift",
-    "section 45(4) reconstitution firm",
-    "section 9B dissolution firm",
-    "section 50D fair market value",
-    "HUF partition section 171",
-    "section 47(iii) gift transfer",
-    "slump sale section 50B",
-    "capital gains family partition",
-    "SEBI regulation 10 inter se transfer promoter",
-    "open offer exemption family restructuring",
-    "SEBI regulation 23 related party transaction",
-    "SEBI regulation 37 scheme arrangement listing",
-    "delisting equity family",
-    "SAT order open offer",
-    "stamp duty scheme arrangement",
-    "conveyance family arrangement stamp",
-    "amalgamation stamp duty exemption",
-    "Hindustan Lever stamp duty scheme",
+    "capital reduction section 66 NCLT",
+    "family arrangement settlement deed judgment",
+    "family settlement partition High Court",
+    "Hindu Succession coparcenary partition",
+    "section 2(19AA) demerger ITAT",
+    "section 47 exemption amalgamation ITAT",
+    "section 56(2)(x) deemed gift tribunal",
+    "section 45(4) reconstitution firm ITAT",
+    "slump sale section 50B ITAT 2026",
+    "SEBI regulation 10 inter se transfer",
+    "open offer exemption SAT order",
+    "stamp duty scheme arrangement High Court",
     "FEMA share transfer NRI family",
-    "FEMA pricing guidelines family transfer",
-    "RBI compounding order family",
-    "liberalised remittance scheme inheritance",
-    "private trust transfer capital gains",
-    "section 60 revocable transfer trust",
-    "section 161 discretionary trust taxation",
-    "irrevocable trust settlor beneficiary",
-    "trust succession planning",
-    "section 29A related party resolution plan",
-    "oppression mismanagement family section 241",
-    "IBC family business dispute",
+    "private trust capital gains ITAT",
+    "section 29A IBC related party",
+    "oppression mismanagement NCLT family",
+]
+
+SEARCH_QUERIES_BROAD = [
+    "NCLT scheme of arrangement order",
+    "NCLAT appeal scheme amalgamation",
+    "demerger tax neutrality judgment India",
+    "family business partition judgment India",
+    "HUF partition capital gains",
+    "listed company promoter restructuring SEBI",
+    "delisting regulation family group",
+    "trust taxation India ITAT",
+    "LLP reconstitution tax",
+    "section 9B dissolution partnership",
+    "appointed date scheme arrangement NCLT",
+    "valuation scheme arrangement",
+    "related party transaction SEBI order",
+    "stamp duty exemption amalgamation",
+    "succession planning India trust",
+    "family settlement registration requirement",
+    "cross border merger India NCLT",
+    "FEMA pricing guidelines share transfer",
+    "RBI compounding order FEMA",
+    "IBC resolution plan family company",
 ]
 
 CLASSIFICATION_PROMPT = """You are a legal classification engine for an M&A and transaction structuring advisory firm in India (Katalyst Advisors). Your task is to determine whether a given judgment, order, or legal article is relevant to the firm's practice areas, and if so, classify it.
@@ -166,29 +152,49 @@ TEXT TO CLASSIFY:
 """
 
 
+def safe_get(url, timeout=30):
+    try:
+        resp = requests.get(url, timeout=timeout, headers=HEADERS)
+        if resp.status_code == 200:
+            return resp
+    except Exception as e:
+        logger.error("HTTP error for %s: %s", url[:80], str(e)[:100])
+    return None
+
+
+def strip_html(text):
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def fetch_google_search(query, num=10):
+    results = []
+    try:
+        search_url = "https://www.google.com/search?q=" + quote(query) + "&num=" + str(num)
+        resp = safe_get(search_url)
+        if resp:
+            matches = re.findall(r'<a href="/url\?q=(https?://[^&"]+)', resp.text)
+            title_matches = re.findall(r'<h3[^>]*>(.*?)</h3>', resp.text, re.DOTALL)
+            for i, url in enumerate(matches[:num]):
+                if "google.com" in url or "googleapis.com" in url:
+                    continue
+                title = strip_html(title_matches[i]) if i < len(title_matches) else url
+                results.append({"title": title, "url": url, "snippet": "", "source": "Google Search"})
+    except Exception as e:
+        logger.error("Google search error for '%s': %s", query[:50], str(e)[:100])
+    return results
+
+
 def fetch_indian_kanoon(query, page=0):
     results = []
     try:
-        if not os.environ.get("INDIAN_KANOON_API_KEY"):
-            public_url = "https://indiankanoon.org/search/?formInput=" + requests.utils.quote(query)
-            resp = requests.get(public_url, timeout=30, headers={"User-Agent": "KatalystRadar/1.0"})
-            if resp.status_code == 200:
-                matches = re.findall(r'<a href="(/doc/\d+/)"[^>]*>(.*?)</a>', resp.text)
-                for match in matches[:10]:
-                    path, title = match
-                    clean_title = re.sub(r'<[^>]+>', '', title).strip()
-                    if clean_title and len(clean_title) > 10:
-                        results.append({
-                            "title": clean_title,
-                            "url": "https://indiankanoon.org" + path,
-                            "snippet": "",
-                            "source": "Indian Kanoon"
-                        })
-        else:
+        api_key = os.environ.get("INDIAN_KANOON_API_KEY", "")
+        if api_key:
             url = "https://api.indiankanoon.org/search/"
             params = {"formInput": query, "pagenum": page}
-            headers = {"Authorization": "Token " + os.environ.get("INDIAN_KANOON_API_KEY", "")}
-            resp = requests.get(url, params=params, headers=headers, timeout=30)
+            ik_headers = {"Authorization": "Token " + api_key}
+            resp = requests.get(url, params=params, headers=ik_headers, timeout=30)
             if resp.status_code == 200:
                 data = resp.json()
                 for doc in data.get("docs", []):
@@ -198,25 +204,136 @@ def fetch_indian_kanoon(query, page=0):
                         "snippet": doc.get("headline", ""),
                         "source": "Indian Kanoon"
                     })
+        else:
+            gquery = "site:indiankanoon.org " + query
+            g_results = fetch_google_search(gquery, 5)
+            for r in g_results:
+                if "indiankanoon.org" in r["url"]:
+                    r["source"] = "Indian Kanoon (via Google)"
+                    results.append(r)
     except Exception as e:
-        logger.error("Indian Kanoon fetch error for '%s': %s", query, e)
+        logger.error("Indian Kanoon error for '%s': %s", query[:50], str(e)[:100])
     return results
 
 
-def fetch_rss_feed(feed_url, source_name):
+def fetch_nclt_orders():
     results = []
     try:
-        feed = feedparser.parse(feed_url)
-        for entry in feed.entries[:15]:
-            results.append({
-                "title": entry.get("title", ""),
-                "url": entry.get("link", ""),
-                "snippet": entry.get("summary", entry.get("description", "")),
-                "source": source_name,
-                "published": entry.get("published", "")
-            })
+        benches = [
+            ("https://nclt.gov.in/order-judgment-by-bench/principal-bench-new-delhi", "NCLT Delhi"),
+            ("https://nclt.gov.in/order-judgment-by-bench/mumbai-bench", "NCLT Mumbai"),
+            ("https://nclt.gov.in/order-judgment-by-bench/ahmedabad-bench", "NCLT Ahmedabad"),
+            ("https://nclt.gov.in/order-judgment-by-bench/bengaluru-bench", "NCLT Bengaluru"),
+            ("https://nclt.gov.in/order-judgment-by-bench/chennai-bench", "NCLT Chennai"),
+            ("https://nclt.gov.in/order-judgment-by-bench/kolkata-bench", "NCLT Kolkata"),
+        ]
+        for bench_url, bench_name in benches:
+            resp = safe_get(bench_url)
+            if resp:
+                matches = re.findall(r'<a[^>]+href="([^"]*)"[^>]*>(.*?)</a>', resp.text, re.DOTALL)
+                for href, title_raw in matches:
+                    title = strip_html(title_raw).strip()
+                    if len(title) > 15 and ("order" in href.lower() or "judgment" in href.lower() or ".pdf" in href.lower()):
+                        full_url = href if href.startswith("http") else "https://nclt.gov.in" + href
+                        results.append({"title": title[:200], "url": full_url, "snippet": "", "source": bench_name})
+            time.sleep(1)
     except Exception as e:
-        logger.error("RSS fetch error for %s: %s", source_name, e)
+        logger.error("NCLT fetch error: %s", str(e)[:100])
+    logger.info("NCLT: %d results from direct scrape", len(results))
+    return results
+
+
+def fetch_nclat_orders():
+    results = []
+    try:
+        resp = safe_get("https://nclat.nic.in/?page_id=585")
+        if resp:
+            matches = re.findall(r'<a[^>]+href="([^"]*)"[^>]*>(.*?)</a>', resp.text, re.DOTALL)
+            for href, title_raw in matches:
+                title = strip_html(title_raw).strip()
+                if len(title) > 15 and (".pdf" in href.lower() or "order" in href.lower()):
+                    full_url = href if href.startswith("http") else "https://nclat.nic.in/" + href
+                    results.append({"title": title[:200], "url": full_url, "snippet": "", "source": "NCLAT"})
+    except Exception as e:
+        logger.error("NCLAT fetch error: %s", str(e)[:100])
+    logger.info("NCLAT: %d results", len(results))
+    return results
+
+
+def fetch_sci_judgments():
+    results = []
+    try:
+        resp = safe_get("https://main.sci.gov.in/judgments")
+        if resp:
+            matches = re.findall(r'<a[^>]+href="([^"]*)"[^>]*>(.*?)</a>', resp.text, re.DOTALL)
+            for href, title_raw in matches:
+                title = strip_html(title_raw).strip()
+                if len(title) > 15 and ("judgment" in href.lower() or ".pdf" in href.lower() or "jonew" in href.lower()):
+                    full_url = href if href.startswith("http") else "https://main.sci.gov.in" + href
+                    results.append({"title": title[:200], "url": full_url, "snippet": "", "source": "Supreme Court of India"})
+    except Exception as e:
+        logger.error("SCI fetch error: %s", str(e)[:100])
+    logger.info("Supreme Court: %d results", len(results))
+    return results
+
+
+def fetch_sebi_orders():
+    results = []
+    try:
+        urls = [
+            ("https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=1&ssid=2&smid=0", "SEBI Orders"),
+            ("https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=2&ssid=9&smid=0", "SEBI Circulars"),
+        ]
+        for sebi_url, source_name in urls:
+            resp = safe_get(sebi_url)
+            if resp:
+                matches = re.findall(r'<a[^>]+href="([^"]*)"[^>]*>(.*?)</a>', resp.text, re.DOTALL)
+                for href, title_raw in matches:
+                    title = strip_html(title_raw).strip()
+                    if len(title) > 15:
+                        full_url = href if href.startswith("http") else "https://www.sebi.gov.in" + href
+                        results.append({"title": title[:200], "url": full_url, "snippet": "", "source": source_name})
+            time.sleep(1)
+    except Exception as e:
+        logger.error("SEBI fetch error: %s", str(e)[:100])
+    logger.info("SEBI: %d results", len(results))
+    return results
+
+
+def fetch_sat_orders():
+    results = []
+    try:
+        resp = safe_get("https://sat.gov.in/english/orders.htm")
+        if resp:
+            matches = re.findall(r'<a[^>]+href="([^"]*)"[^>]*>(.*?)</a>', resp.text, re.DOTALL)
+            for href, title_raw in matches:
+                title = strip_html(title_raw).strip()
+                if len(title) > 10 and (".pdf" in href.lower() or "order" in href.lower()):
+                    full_url = href if href.startswith("http") else "https://sat.gov.in/english/" + href
+                    results.append({"title": title[:200], "url": full_url, "snippet": "", "source": "SAT"})
+    except Exception as e:
+        logger.error("SAT fetch error: %s", str(e)[:100])
+    logger.info("SAT: %d results", len(results))
+    return results
+
+
+def fetch_itat_orders():
+    results = []
+    queries = [
+        "site:itatonline.org demerger section 2(19AA)",
+        "site:itatonline.org slump sale section 50B",
+        "site:itatonline.org family partition HUF",
+        "site:itatonline.org trust taxation section 161",
+        "site:itatonline.org capital gains exemption section 47",
+        "site:itatonline.org section 56(2)(x) gift",
+    ]
+    for q in queries:
+        g_results = fetch_google_search(q, 3)
+        for r in g_results:
+            r["source"] = "ITAT (via Google)"
+            results.append(r)
+        time.sleep(1)
+    logger.info("ITAT: %d results via Google", len(results))
     return results
 
 
@@ -226,18 +343,69 @@ RSS_FEEDS = [
     ("https://www.taxmann.com/post/blog/feed/", "Taxmann"),
     ("https://taxguru.in/feed", "TaxGuru"),
     ("https://www.scconline.com/blog/post/feed/", "SCC Online Blog"),
+    ("https://www.mondaq.com/india/feeds/rss/latest", "Mondaq India"),
+    ("https://corporate.cyrilamarchandblogs.com/feed/", "CAM Blog"),
+    ("https://indiacorplaw.in/feed", "IndiaCorpLaw"),
+    ("https://taxguru.in/income-tax/feed", "TaxGuru Income Tax"),
+    ("https://taxguru.in/company-law/feed", "TaxGuru Company Law"),
+    ("https://taxguru.in/sebi/feed", "TaxGuru SEBI"),
+    ("https://www.livelaw.in/tax-cases/feed", "LiveLaw Tax"),
+    ("https://www.livelaw.in/corporate-law/feed", "LiveLaw Corporate"),
 ]
 
 
-def fetch_judgment_full_text(url):
+def fetch_rss_feed(feed_url, source_name):
+    results = []
     try:
-        resp = requests.get(url, timeout=30, headers={"User-Agent": "KatalystRadar/1.0"})
-        if resp.status_code == 200:
-            text = re.sub(r'<[^>]+>', ' ', resp.text)
-            text = re.sub(r'\s+', ' ', text).strip()
-            return text[:3000]
+        feed = feedparser.parse(feed_url)
+        for entry in feed.entries[:20]:
+            results.append({
+                "title": entry.get("title", ""),
+                "url": entry.get("link", ""),
+                "snippet": strip_html(entry.get("summary", entry.get("description", "")))[:1000],
+                "source": source_name,
+                "published": entry.get("published", "")
+            })
     except Exception as e:
-        logger.error("Full text fetch error for %s: %s", url, e)
+        logger.error("RSS error for %s: %s", source_name, str(e)[:100])
+    return results
+
+
+def fetch_google_legal_news():
+    results = []
+    queries = [
+        "NCLT scheme arrangement order 2026",
+        "NCLT demerger order 2026",
+        "family arrangement judgment India 2026",
+        "ITAT demerger slump sale 2026",
+        "SEBI open offer exemption order 2026",
+        "stamp duty scheme arrangement High Court 2026",
+        "FEMA NRI share transfer ruling 2026",
+        "trust taxation ITAT India 2026",
+        "NCLT amalgamation order 2026",
+        "family settlement deed validity judgment",
+        "section 56(2)(x) deemed gift ITAT",
+        "capital reduction NCLT order",
+        "SAT SEBI takeover regulation order",
+        "composite scheme demerger NCLT",
+        "HUF partition tax implications judgment",
+    ]
+    for q in queries:
+        g_results = fetch_google_search(q, 5)
+        results.extend(g_results)
+        time.sleep(2)
+    logger.info("Google legal news: %d results", len(results))
+    return results
+
+
+def fetch_full_text(url):
+    try:
+        resp = safe_get(url)
+        if resp:
+            text = strip_html(resp.text)
+            return text[:4000]
+    except Exception as e:
+        logger.error("Full text error for %s: %s", url[:50], str(e)[:100])
     return ""
 
 
@@ -294,105 +462,112 @@ def is_already_processed(judgment_id):
 
 def save_judgment(judgment_id, raw, classification):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        INSERT OR REPLACE INTO judgments
+    conn.execute("""INSERT OR REPLACE INTO judgments
         (id, title, court, date_decided, date_fetched, source, source_url,
          full_text_snippet, categories, sections, relevance_score,
          practitioner_note, raw_classification)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        judgment_id,
-        raw.get("title", "Unknown"),
-        classification.get("court_or_tribunal", ""),
-        classification.get("date_decided", ""),
-        datetime.utcnow().isoformat(),
-        raw.get("source", ""),
-        raw.get("url", ""),
-        raw.get("snippet", "")[:500],
-        json.dumps(classification.get("categories", [])),
-        json.dumps(classification.get("sections_engaged", [])),
-        classification.get("relevance_score", ""),
-        classification.get("practitioner_note", ""),
-        json.dumps(classification),
-    ))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (judgment_id, raw.get("title", "Unknown"),
+         classification.get("court_or_tribunal", ""),
+         classification.get("date_decided", ""),
+         datetime.utcnow().isoformat(),
+         raw.get("source", ""), raw.get("url", ""),
+         raw.get("snippet", "")[:500],
+         json.dumps(classification.get("categories", [])),
+         json.dumps(classification.get("sections_engaged", [])),
+         classification.get("relevance_score", ""),
+         classification.get("practitioner_note", ""),
+         json.dumps(classification)))
     conn.commit()
     conn.close()
 
 
 def log_sweep(source, fetched, relevant, errors=""):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        INSERT INTO sweep_log (sweep_time, source, results_fetched, results_relevant, errors)
-        VALUES (?, ?, ?, ?, ?)
-    """, (datetime.utcnow().isoformat(), source, fetched, relevant, errors))
+    conn.execute("""INSERT INTO sweep_log (sweep_time, source, results_fetched, results_relevant, errors)
+        VALUES (?, ?, ?, ?, ?)""",
+        (datetime.utcnow().isoformat(), source, fetched, relevant, errors))
     conn.commit()
     conn.close()
 
 
-def run_sweep():
-    logger.info("=== Starting sweep at %s ===", datetime.utcnow().isoformat())
-    total_fetched = 0
-    total_relevant = 0
-
-    logger.info("Sweeping Indian Kanoon...")
-    ik_results = []
-    for query in SEARCH_QUERIES:
-        results = fetch_indian_kanoon(query)
-        ik_results.extend(results)
-        time.sleep(1)
-
-    seen_urls = set()
-    unique_ik = []
-    for r in ik_results:
-        if r["url"] not in seen_urls:
-            seen_urls.add(r["url"])
-            unique_ik.append(r)
-    ik_results = unique_ik
-
-    logger.info("Indian Kanoon: %d unique results", len(ik_results))
-    total_fetched += len(ik_results)
-
-    for result in ik_results:
+def process_results(results, source_label):
+    relevant_count = 0
+    seen = set()
+    unique = []
+    for r in results:
+        if r["url"] not in seen:
+            seen.add(r["url"])
+            unique.append(r)
+    logger.info("%s: %d unique results to process", source_label, len(unique))
+    for result in unique:
         jid = generate_id(result["title"], result["url"])
         if is_already_processed(jid):
             continue
-        full_text = result.get("snippet", "")
-        if not full_text or len(full_text) < 100:
-            full_text = fetch_judgment_full_text(result["url"])
+        text = result.get("snippet", "")
+        if not text or len(text) < 80:
+            text = fetch_full_text(result["url"])
             time.sleep(0.5)
-        if not full_text:
+        if not text or len(text) < 30:
             continue
-        classification = classify_judgment(full_text, result["title"])
+        classification = classify_judgment(text, result["title"])
         if classification and classification.get("relevant"):
             save_judgment(jid, result, classification)
-            total_relevant += 1
+            relevant_count += 1
             logger.info("  RELEVANT: %s [%s]", result["title"][:80], classification.get("relevance_score", ""))
         time.sleep(0.3)
+    log_sweep(source_label, len(unique), relevant_count)
+    return relevant_count
 
-    log_sweep("Indian Kanoon", len(ik_results), total_relevant)
 
-    rss_relevant = 0
+def run_sweep():
+    logger.info("=== STARTING COMPREHENSIVE SWEEP at %s ===", datetime.utcnow().isoformat())
+    total_relevant = 0
+
+    logger.info("--- Phase 1: RSS Feeds ---")
+    rss_results = []
     for feed_url, source_name in RSS_FEEDS:
-        logger.info("Sweeping %s...", source_name)
+        logger.info("Fetching %s...", source_name)
         results = fetch_rss_feed(feed_url, source_name)
-        total_fetched += len(results)
-        for result in results:
-            jid = generate_id(result["title"], result["url"])
-            if is_already_processed(jid):
-                continue
-            text = result.get("snippet", "")
-            if not text or len(text) < 50:
-                continue
-            classification = classify_judgment(text, result["title"])
-            if classification and classification.get("relevant"):
-                save_judgment(jid, result, classification)
-                rss_relevant += 1
-                total_relevant += 1
-                logger.info("  RELEVANT: %s [%s]", result["title"][:80], classification.get("relevance_score", ""))
-            time.sleep(0.3)
-        log_sweep(source_name, len(results), rss_relevant)
+        rss_results.extend(results)
+        time.sleep(0.5)
+    total_relevant += process_results(rss_results, "RSS Feeds")
 
-    logger.info("=== Sweep complete. %d fetched, %d relevant ===", total_fetched, total_relevant)
+    logger.info("--- Phase 2: Indian Kanoon ---")
+    ik_results = []
+    for query in SEARCH_QUERIES_NARROW:
+        results = fetch_indian_kanoon(query)
+        ik_results.extend(results)
+        time.sleep(1.5)
+    total_relevant += process_results(ik_results, "Indian Kanoon")
+
+    logger.info("--- Phase 3: Court Websites ---")
+    logger.info("Fetching NCLT orders...")
+    total_relevant += process_results(fetch_nclt_orders(), "NCLT Direct")
+    logger.info("Fetching NCLAT orders...")
+    total_relevant += process_results(fetch_nclat_orders(), "NCLAT Direct")
+    logger.info("Fetching Supreme Court judgments...")
+    total_relevant += process_results(fetch_sci_judgments(), "Supreme Court")
+    logger.info("Fetching SEBI orders...")
+    total_relevant += process_results(fetch_sebi_orders(), "SEBI")
+    logger.info("Fetching SAT orders...")
+    total_relevant += process_results(fetch_sat_orders(), "SAT")
+
+    logger.info("--- Phase 4: ITAT via Google ---")
+    total_relevant += process_results(fetch_itat_orders(), "ITAT")
+
+    logger.info("--- Phase 5: Google Legal News ---")
+    total_relevant += process_results(fetch_google_legal_news(), "Google Legal News")
+
+    logger.info("--- Phase 6: Broad Keyword Search ---")
+    broad_results = []
+    for query in SEARCH_QUERIES_BROAD:
+        results = fetch_indian_kanoon(query)
+        broad_results.extend(results)
+        time.sleep(1.5)
+    total_relevant += process_results(broad_results, "Broad Search")
+
+    logger.info("=== SWEEP COMPLETE. Total relevant: %d ===", total_relevant)
 
 
 @app.route("/")
@@ -410,17 +585,13 @@ def get_judgments():
     search = request.args.get("search", "")
     page = int(request.args.get("page", "1"))
     per_page = 20
-
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-
     where_clauses = []
     params = []
-
     cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
     where_clauses.append("date_fetched >= ?")
     params.append(cutoff)
-
     if category:
         where_clauses.append("categories LIKE ?")
         params.append("%" + category + "%")
@@ -430,40 +601,26 @@ def get_judgments():
     if search:
         where_clauses.append("(title LIKE ? OR practitioner_note LIKE ? OR sections LIKE ?)")
         params.extend(["%" + search + "%"] * 3)
-
     where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
     offset = (page - 1) * per_page
-
     count_sql = "SELECT COUNT(*) as cnt FROM judgments WHERE " + where_sql
     total = conn.execute(count_sql, params).fetchone()["cnt"]
-
     query_sql = "SELECT * FROM judgments WHERE " + where_sql + " ORDER BY date_fetched DESC LIMIT ? OFFSET ?"
     rows = conn.execute(query_sql, params + [per_page, offset]).fetchall()
     conn.close()
-
     judgments = []
     for row in rows:
         judgments.append({
-            "id": row["id"],
-            "title": row["title"],
-            "court": row["court"],
-            "date_decided": row["date_decided"],
-            "date_fetched": row["date_fetched"],
-            "source": row["source"],
-            "source_url": row["source_url"],
+            "id": row["id"], "title": row["title"], "court": row["court"],
+            "date_decided": row["date_decided"], "date_fetched": row["date_fetched"],
+            "source": row["source"], "source_url": row["source_url"],
             "categories": json.loads(row["categories"]) if row["categories"] else [],
             "sections": json.loads(row["sections"]) if row["sections"] else [],
             "relevance_score": row["relevance_score"],
             "practitioner_note": row["practitioner_note"],
         })
-
-    return jsonify({
-        "judgments": judgments,
-        "total": total,
-        "page": page,
-        "per_page": per_page,
-        "total_pages": (total + per_page - 1) // per_page,
-    })
+    return jsonify({"judgments": judgments, "total": total, "page": page,
+                     "per_page": per_page, "total_pages": (total + per_page - 1) // per_page})
 
 
 @app.route("/api/stats")
@@ -481,12 +638,8 @@ def get_stats():
         for c in cats:
             cat_counts[str(c)] = cat_counts.get(str(c), 0) + 1
     conn.close()
-    return jsonify({
-        "total_judgments": total,
-        "high_relevance": high,
-        "last_sweep": last_sweep_time,
-        "category_distribution": cat_counts,
-    })
+    return jsonify({"total_judgments": total, "high_relevance": high,
+                     "last_sweep": last_sweep_time, "category_distribution": cat_counts})
 
 
 @app.route("/api/sweep", methods=["POST"])
@@ -496,17 +649,10 @@ def trigger_sweep():
     return jsonify({"status": "Sweep started", "time": datetime.utcnow().isoformat()})
 
 
-# Initialize database and scheduler at module level
 init_db()
-
 scheduler = BackgroundScheduler()
-scheduler.add_job(
-    run_sweep,
-    "interval",
-    hours=SWEEP_INTERVAL_HOURS,
-    id="main_sweep",
-    next_run_time=datetime.utcnow() + timedelta(minutes=2),
-)
+scheduler.add_job(run_sweep, "interval", hours=SWEEP_INTERVAL_HOURS, id="main_sweep",
+                  next_run_time=datetime.utcnow() + timedelta(minutes=2))
 scheduler.start()
 logger.info("Scheduler started. Sweeps every %d hours.", SWEEP_INTERVAL_HOURS)
 
