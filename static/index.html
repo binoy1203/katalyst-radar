@@ -334,6 +334,7 @@
             <span class="stat-label">New Today</span>
         </div>
         <button class="sweep-btn" id="sweepBtn" onclick="triggerSweep()">Run Sweep Now</button>
+        <button class="sweep-btn" style="background:#5a3a1a" onclick="exportDoc()">Export to Word</button>
     </div>
 </div>
 
@@ -352,9 +353,9 @@
             <span class="filter-label">Period</span>
             <select id="filterDays" onchange="loadJudgments()">
                 <option value="7">Last 7 Days</option>
-                <option value="30" selected>Last 30 Days</option>
+                <option value="30">Last 30 Days</option>
                 <option value="90">Last 90 Days</option>
-                <option value="365">Last Year</option>
+                <option value="365" selected>Last Year</option>
             </select>
         </div>
         <div class="filter-group">
@@ -526,8 +527,9 @@
         btn.disabled = true;
         btn.textContent = "Sweeping...";
         fetch(API_BASE + "/api/sweep", { method: "POST" })
-            .then(function() {
-                btn.textContent = "Sweep Running";
+            .then(function(r) {
+                if (r.status === 409) { btn.textContent = "Already Running"; }
+                else { btn.textContent = "Sweep Running"; }
                 setTimeout(function() {
                     btn.disabled = false;
                     btn.textContent = "Run Sweep Now";
@@ -540,6 +542,17 @@
                 btn.textContent = "Sweep Failed";
                 setTimeout(function() { btn.textContent = "Run Sweep Now"; }, 3000);
             });
+    }
+
+    function exportDoc() {
+        var score = document.getElementById("filterScore").value;
+        var days = document.getElementById("filterDays").value;
+        var search = document.getElementById("filterSearch").value;
+        var params = "days=" + days;
+        if (currentCategory) params += "&category=" + currentCategory;
+        if (score) params += "&score=" + score;
+        if (search) params += "&search=" + encodeURIComponent(search);
+        window.open(API_BASE + "/api/export?" + params, "_blank");
     }
 
     function esc(str) {
