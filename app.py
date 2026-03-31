@@ -12,7 +12,7 @@ import time
 import re
 import threading
 from datetime import datetime, timedelta
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 
 import requests
 import feedparser
@@ -29,6 +29,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("radar")
 app = Flask(__name__)
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+sweep_running = False
+sweep_lock = threading.Lock()
 
 
 def init_db():
@@ -133,19 +135,24 @@ def scrape_links(url, source_name, min_title_len=15, href_filter=None):
                     continue
                 if href_filter and not href_filter(href):
                     continue
-                full_url = href if href.startswith("http") else url.rsplit("/", 1)[0] + "/" + href.lstrip("/")
+                full_url = href if href.startswith("http") else urljoin(url, href)
                 results.append({"title": title[:200], "url": full_url, "snippet": "", "source": source_name})
     except Exception as e:
         logger.error("Scrape error for %s: %s", source_name, str(e)[:100])
     return results
 
 def fetch_full_text(url):
+    if url.lower().endswith(".pdf"):
+        return ""
     try:
         resp = safe_get(url)
         if resp:
+            ct = resp.headers.get("Content-Type", "")
+            if "pdf" in ct or "octet-stream" in ct:
+                return ""
             return strip_html(resp.text)[:4000]
-    except:
-        pass
+    except Exception as e:
+        logger.error("Full text error for %s: %s", url[:60], str(e)[:100])
     return ""
 
 def google_multi(queries, source_name, results_per=3, delay=2):
@@ -382,23 +389,26 @@ def fetch_mca_ibbi():
 
 def fetch_exchange():
     return google_multi([
-        "BSE corporate announcement scheme arrangement 2026",
-        "BSE corporate announcement demerger 2026",
-        "BSE corporate announcement amalgamation 2026",
-        "BSE open offer announcement 2026",
-        "BSE delisting announcement 2026",
-        "NSE corporate announcement scheme 2026",
-        "NSE corporate announcement demerger 2026",
-        "NSE open offer announcement 2026",
-        "site:bseindia.com scheme arrangement",
-        "site:bseindia.com demerger announcement",
-        "site:bseindia.com open offer",
-        "site:nseindia.com scheme arrangement",
-        "site:nseindia.com demerger",
-        "stock exchange announcement restructuring India 2026",
-        "corporate action demerger India 2026",
-        "corporate action merger India 2026",
-    ], "Stock Exchange", results_per=3, delay=2)
+        # Search for news coverage of exchange filings, not the exchange sites directly
+        "BSE filing scheme of arrangement India 2026",
+        "NSE filing scheme of arrangement India 2026",
+        "BSE filing demerger India 2026",
+        "stock exchange scheme arrangement filing India",
+        "company filed scheme arrangement NCLT 2026",
+        "open offer letter filed SEBI 2026",
+        "delisting offer filed stock exchange India 2026",
+        "composite scheme filed BSE NSE 2026",
+        "corporate action India demerger merger 2026",
+        "scheme of arrangement SEBI no objection 2026",
+        "SEBI observation letter scheme arrangement 2026",
+        "listed company demerger announcement India 2026",
+        "listed company merger announcement India 2026",
+        "listed company open offer announcement India 2026",
+        "promoter open offer India 2026",
+        "voluntary delisting India 2026",
+        "record date demerger India 2026",
+        "entitlement ratio demerger India 2026",
+    ], "Exchange / Deal Filings", results_per=3, delay=2)
 
 
 def fetch_newspaper_governance():
@@ -443,11 +453,21 @@ def fetch_law_firm_blogs():
 
 def fetch_proxy_advisory():
     return google_multi([
-        "IiAS proxy advisory India 2026",
-        "InGovern governance India 2026",
-        "proxy advisory related party India 2026",
-        "IiAS voting recommendation India",
-        "proxy advisory firm India corporate governance",
+        # Search for news coverage of proxy advisory actions, not the paywalled reports
+        "IiAS opposes related party transaction India",
+        "IiAS recommends against resolution India",
+        "InGovern raises governance concerns India",
+        "SES Governance proxy advisory India",
+        "proxy advisory opposes merger India",
+        "proxy advisory opposes scheme India",
+        "proxy advisory flags related party India",
+        "proxy advisory firm India 2026 recommendation",
+        "institutional investor opposes resolution India 2026",
+        "IiAS voting advisory India 2026",
+        "proxy advisory delisting India",
+        "proxy advisory open offer India",
+        "minority shareholders oppose scheme India 2026",
+        "institutional shareholder concerns India governance",
     ], "Proxy Advisory", results_per=3, delay=1.5)
 
 
@@ -604,7 +624,7 @@ def save_judgment(jid, raw, cls):
         (jid, raw.get("title","Unknown"), cls.get("court_or_tribunal",""),
          cls.get("date_decided",""), datetime.utcnow().isoformat(),
          raw.get("source",""), raw.get("url",""), raw.get("snippet","")[:500],
-         json.dumps(cls.get("categories",[])), json.dumps(cls.get("sections_engaged",[])),
+         json.dumps(cls.get("categories",[]),separators=(",",":")), json.dumps(cls.get("sections_engaged",[]),separators=(",",":")),
          cls.get("relevance_score",""), cls.get("summary", cls.get("practitioner_note","")),
          json.dumps(cls)))
     conn.commit()
@@ -647,6 +667,19 @@ def process_results(results, label):
 # ---------------------------------------------------------------------------
 
 def run_sweep():
+    global sweep_running
+    acquired = sweep_lock.acquire(blocking=False)
+    if not acquired:
+        logger.info("Sweep already running, skipping.")
+        return
+    sweep_running = True
+    try:
+        _do_sweep()
+    finally:
+        sweep_running = False
+        sweep_lock.release()
+
+def _do_sweep():
     logger.info("=== v5-FINAL SWEEP at %s ===", datetime.utcnow().isoformat())
     total = 0
 
@@ -728,7 +761,15 @@ def get_judgments():
     wc.append("date_fetched >= ?")
     params.append((datetime.utcnow() - timedelta(days=days)).isoformat())
     if category:
-        wc.append("categories LIKE ?"); params.append("%" + category + "%")
+        wc.append("(categories LIKE ? OR categories LIKE ? OR categories LIKE ? OR categories LIKE ? OR categories LIKE ? OR categories LIKE ?)")
+        params.extend([
+            "[" + category + "]",
+            "[" + category + ",",
+            "," + category + ",",
+            "," + category + "]",
+            ", " + category + ",",
+            ", " + category + "]",
+        ])
     if score:
         wc.append("relevance_score = ?"); params.append(score)
     if search:
@@ -763,8 +804,134 @@ def get_stats():
     conn.close()
     return jsonify({"total_judgments": total, "high_relevance": high, "last_sweep": ls["sweep_time"] if ls else None, "category_distribution": cats})
 
+@app.route("/api/export")
+def export_doc():
+    """Export current filtered results as a Word document."""
+    from docx import Document as DocxDocument
+    from docx.shared import Pt, Inches, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from io import BytesIO
+
+    category = request.args.get("category", "")
+    score = request.args.get("score", "")
+    days = int(request.args.get("days", "365"))
+    search = request.args.get("search", "")
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    wc, params = [], []
+    wc.append("date_fetched >= ?")
+    params.append((datetime.utcnow() - timedelta(days=days)).isoformat())
+    if category:
+        wc.append("(categories LIKE ? OR categories LIKE ? OR categories LIKE ? OR categories LIKE ? OR categories LIKE ? OR categories LIKE ?)")
+        params.extend(["[" + category + "]", "[" + category + ",", "," + category + ",", "," + category + "]", ", " + category + ",", ", " + category + "]"])
+    if score:
+        wc.append("relevance_score = ?"); params.append(score)
+    if search:
+        wc.append("(title LIKE ? OR practitioner_note LIKE ? OR sections LIKE ?)")
+        params.extend(["%" + search + "%"] * 3)
+    w = " AND ".join(wc) if wc else "1=1"
+    rows = conn.execute("SELECT * FROM judgments WHERE " + w + " ORDER BY date_fetched DESC LIMIT 200", params).fetchall()
+    conn.close()
+
+    cat_names = {1:"Schemes",2:"Family Arrangement",3:"Income Tax",4:"SEBI",5:"Stamp Duty",6:"FEMA",7:"Trust Law",8:"Insolvency",9:"Boardroom",10:"Ind AS"}
+
+    doc = DocxDocument()
+    style = doc.styles["Normal"]
+    style.font.name = "Calibri"
+    style.font.size = Pt(10)
+
+    title = doc.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = title.add_run("Katalyst Judgment Radar")
+    run.bold = True
+    run.font.size = Pt(18)
+    run.font.color.rgb = RGBColor(139, 37, 0)
+
+    subtitle = doc.add_paragraph()
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run2 = subtitle.add_run("Generated: " + datetime.utcnow().strftime("%d %B %Y") + " | Results: " + str(len(rows)))
+    run2.font.size = Pt(10)
+    run2.font.color.rgb = RGBColor(107, 101, 96)
+
+    doc.add_paragraph("")
+
+    for row in rows:
+        # Title
+        p = doc.add_paragraph()
+        t_run = p.add_run(row["title"] or "Untitled")
+        t_run.bold = True
+        t_run.font.size = Pt(11)
+        t_run.font.color.rgb = RGBColor(26, 26, 26)
+
+        # Meta line
+        meta_parts = []
+        if row["court"]:
+            meta_parts.append(row["court"])
+        if row["source"]:
+            meta_parts.append(row["source"])
+        if row["date_fetched"]:
+            try:
+                dt = datetime.fromisoformat(row["date_fetched"])
+                meta_parts.append(dt.strftime("%d %b %Y"))
+            except:
+                pass
+        relevance = (row["relevance_score"] or "").upper()
+        if relevance:
+            meta_parts.append("Relevance: " + relevance)
+        if meta_parts:
+            mp = doc.add_paragraph()
+            mr = mp.add_run(" | ".join(meta_parts))
+            mr.font.size = Pt(9)
+            mr.font.color.rgb = RGBColor(107, 101, 96)
+
+        # Categories and sections
+        tags = []
+        try:
+            for c in json.loads(row["categories"] or "[]"):
+                tags.append(cat_names.get(c, "Cat " + str(c)))
+        except:
+            pass
+        try:
+            for s in json.loads(row["sections"] or "[]"):
+                tags.append(str(s))
+        except:
+            pass
+        if tags:
+            tp = doc.add_paragraph()
+            tr = tp.add_run(", ".join(tags))
+            tr.font.size = Pt(9)
+            tr.italic = True
+            tr.font.color.rgb = RGBColor(71, 85, 105)
+
+        # Summary
+        if row["practitioner_note"]:
+            sp = doc.add_paragraph()
+            sr = sp.add_run(row["practitioner_note"])
+            sr.font.size = Pt(10)
+
+        # Link
+        if row["source_url"]:
+            lp = doc.add_paragraph()
+            lr = lp.add_run(row["source_url"])
+            lr.font.size = Pt(8)
+            lr.font.color.rgb = RGBColor(139, 37, 0)
+
+        doc.add_paragraph("_" * 60)
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+
+    from flask import send_file
+    return send_file(buf, as_attachment=True,
+                     download_name="Katalyst_Radar_" + datetime.utcnow().strftime("%Y%m%d") + ".docx",
+                     mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
 @app.route("/api/sweep", methods=["POST"])
 def trigger_sweep():
+    if sweep_lock.locked():
+        return jsonify({"status": "Sweep already running. Please wait."}), 409
     threading.Thread(target=run_sweep).start()
     return jsonify({"status": "Sweep started", "time": datetime.utcnow().isoformat()})
 
