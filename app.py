@@ -12,7 +12,7 @@ import time
 import re
 import threading
 from datetime import datetime, timedelta
-from urllib.parse import quote, urljoin
+from urllib.parse import urljoin
 
 import requests
 import feedparser
@@ -55,6 +55,8 @@ CLASSIFICATION_PROMPT = """You are a classification engine for Katalyst Advisors
 
 IMPORTANT: Be LIBERAL. If there is ANY reasonable connection to M&A, corporate restructuring, family business, corporate governance, taxation of transactions, regulatory action on companies, or deal activity, classify it as relevant. When in doubt, INCLUDE it. Missing something useful is worse than including something borderline.
 
+HOWEVER, exclude pure procedural noise: cause lists, hearing schedules, adjournment notices, Webex/conference links, generic tribunal homepages, file download indexes, and content that has no substantive legal or commercial information.
+
 CATEGORIES:
 1. SCHEMES OF ARRANGEMENT: mergers, demergers, amalgamations, composite schemes, capital reductions, NCLT/NCLAT orders on schemes, appointed dates, valuation disputes
 2. FAMILY ARRANGEMENT: family settlements, partitions, HUF disputes, succession, family business splits, will contests, inheritance involving business assets
@@ -93,18 +95,22 @@ def strip_html(text):
     text = re.sub(r'<[^>]+>', ' ', text)
     return re.sub(r'\s+', ' ', text).strip()
 
-def fetch_google_search(query, num=10):
-    """Search Google via Serper.dev API. Returns clean structured results."""
+def fetch_google_search(query, num=10, recent_only=True):
+    """Search Google via Serper.dev API. Returns clean structured results.
+    recent_only=True limits to last 30 days. Set False for broader historical search."""
     results = []
     serper_key = os.environ.get("SERPER_API_KEY", "")
     if not serper_key:
         logger.error("No SERPER_API_KEY set. Google search disabled.")
         return results
     try:
+        payload = {"q": query, "num": num, "gl": "in", "hl": "en"}
+        if recent_only:
+            payload["tbs"] = "qdr:m"  # Last month
         resp = requests.post(
             "https://google.serper.dev/search",
             headers={"X-API-KEY": serper_key, "Content-Type": "application/json"},
-            json={"q": query, "num": num, "gl": "in", "hl": "en"},
+            json=payload,
             timeout=30,
         )
         if resp.status_code == 200:
@@ -116,7 +122,6 @@ def fetch_google_search(query, num=10):
                     "snippet": item.get("snippet", ""),
                     "source": "Google",
                 })
-            # Also grab news results if present
             for item in data.get("news", []):
                 results.append({
                     "title": item.get("title", ""),
@@ -151,6 +156,9 @@ def scrape_links(url, source_name, min_title_len=15, href_filter=None):
         resp = safe_get(url)
         if resp:
             for href, title_raw in re.findall(r'<a[^>]+href="([^"]*)"[^>]*>(.*?)</a>', resp.text, re.DOTALL):
+                # Skip javascript pseudo-links and empty hrefs
+                if href.startswith("javascript") or href.startswith("#") or not href.strip():
+                    continue
                 title = strip_html(title_raw).strip()
                 if len(title) < min_title_len:
                     continue
@@ -162,15 +170,64 @@ def scrape_links(url, source_name, min_title_len=15, href_filter=None):
         logger.error("Scrape error for %s: %s", source_name, str(e)[:100])
     return results
 
-def fetch_full_text(url):
-    if url.lower().endswith(".pdf"):
-        return ""
+def extract_pdf_text(pdf_bytes):
+    """Extract text from PDF bytes. Tries pdfplumber first, falls back to PyPDF2."""
+    import io
     try:
-        resp = safe_get(url)
-        if resp:
-            ct = resp.headers.get("Content-Type", "")
-            if "pdf" in ct or "octet-stream" in ct:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            text = ""
+            for page in pdf.pages[:5]:
+                page_text = page.extract_text()
+                if page_text:
+                    text += page_text + " "
+                if len(text) > 4000:
+                    break
+            return text[:4000].strip()
+    except Exception as e:
+        logger.error("pdfplumber failed, trying PyPDF2: %s", str(e)[:100])
+    try:
+        from PyPDF2 import PdfReader
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        text = ""
+        for page in reader.pages[:5]:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + " "
+            if len(text) > 4000:
+                break
+        return text[:4000].strip()
+    except Exception as e:
+        logger.error("PyPDF2 also failed: %s", str(e)[:100])
+    return ""
+
+
+def fetch_full_text(url):
+    """Fetch text from a URL. Handles both HTML pages and PDF documents."""
+    try:
+        resp = requests.get(url, timeout=30, headers=HEADERS)
+        if resp.status_code != 200:
+            return ""
+        ct = resp.headers.get("Content-Type", "").lower()
+        is_pdf = url.lower().endswith(".pdf") or "pdf" in ct
+
+        if is_pdf:
+            if len(resp.content) > 5 * 1024 * 1024:
+                logger.info("PDF too large (>5MB), skipping: %s", url[:60])
                 return ""
+            text = extract_pdf_text(resp.content)
+            if text:
+                logger.info("PDF extracted %d chars from: %s", len(text), url[:60])
+            return text
+        elif "octet-stream" in ct:
+            # Could be a PDF served without proper content type. Try extraction.
+            if len(resp.content) < 5 * 1024 * 1024 and resp.content[:5] == b"%PDF-":
+                text = extract_pdf_text(resp.content)
+                if text:
+                    logger.info("PDF (octet-stream) extracted %d chars from: %s", len(text), url[:60])
+                    return text
+            return ""
+        else:
             return strip_html(resp.text)[:4000]
     except Exception as e:
         logger.error("Full text error for %s: %s", url[:60], str(e)[:100])
@@ -251,87 +308,87 @@ def fetch_indian_kanoon(query):
 
 def fetch_nclt():
     return google_multi([
-        "NCLT order scheme arrangement 2026",
-        "NCLT order demerger 2026",
-        "NCLT order amalgamation 2026",
-        "NCLT order capital reduction 2026",
-        "NCLT order oppression mismanagement 2026",
-        "NCLT order company petition 2026",
-        "NCLT Mumbai bench order 2026",
-        "NCLT Delhi bench order 2026",
-        "NCLT Ahmedabad order 2026",
-        "NCLT Bengaluru order 2026",
-        "NCLT Chennai order 2026",
-        "NCLT Kolkata order 2026",
-        "NCLT Hyderabad order 2026",
-        "NCLT Chandigarh order 2026",
+        "NCLT order scheme arrangement",
+        "NCLT order demerger",
+        "NCLT order amalgamation",
+        "NCLT order capital reduction",
+        "NCLT order oppression mismanagement",
+        "NCLT order company petition",
+        "NCLT Mumbai bench order",
+        "NCLT Delhi bench order",
+        "NCLT Ahmedabad order",
+        "NCLT Bengaluru order",
+        "NCLT Chennai order",
+        "NCLT Kolkata order",
+        "NCLT Hyderabad order",
+        "NCLT Chandigarh order",
         "NCLT scheme sanction order India",
         "NCLT appointed date scheme order",
-        "NCLT winding up order 2026",
-        "site:livelaw.in NCLT order 2026",
-        "site:barandbench.com NCLT order 2026",
-        "site:scconline.com NCLT order 2026",
-        "site:taxguru.in NCLT order 2026",
+        "NCLT winding up order",
+        "site:livelaw.in NCLT order",
+        "site:barandbench.com NCLT order",
+        "site:scconline.com NCLT order",
+        "site:taxguru.in NCLT order",
     ], "NCLT", results_per=5, delay=2)
 
 
 def fetch_nclat():
     return google_multi([
-        "NCLAT order 2026",
-        "NCLAT appeal scheme arrangement 2026",
-        "NCLAT judgment company law 2026",
-        "NCLAT order insolvency 2026",
+        "NCLAT order",
+        "NCLAT appeal scheme arrangement",
+        "NCLAT judgment company law",
+        "NCLAT order insolvency",
         "NCLAT order oppression mismanagement",
-        "site:livelaw.in NCLAT 2026",
-        "site:barandbench.com NCLAT 2026",
-        "site:scconline.com NCLAT 2026",
+        "site:livelaw.in NCLAT",
+        "site:barandbench.com NCLAT",
+        "site:scconline.com NCLAT",
     ], "NCLAT", results_per=5, delay=2)
 
 
 def fetch_supreme_court():
     return google_multi([
-        "Supreme Court India company law judgment 2026",
-        "Supreme Court India merger demerger 2026",
-        "Supreme Court India family settlement 2026",
-        "Supreme Court India corporate dispute 2026",
-        "Supreme Court India tax appeal restructuring 2026",
-        "Supreme Court India SEBI appeal 2026",
-        "Supreme Court India insolvency IBC 2026",
-        "Supreme Court India capital gains exemption 2026",
-        "site:main.sci.gov.in judgment 2026",
-        "site:livelaw.in Supreme Court company law 2026",
-        "site:barandbench.com Supreme Court corporate 2026",
-        "site:scconline.com Supreme Court company 2026",
+        "Supreme Court India company law judgment",
+        "Supreme Court India merger demerger",
+        "Supreme Court India family settlement",
+        "Supreme Court India corporate dispute",
+        "Supreme Court India tax appeal restructuring",
+        "Supreme Court India SEBI appeal",
+        "Supreme Court India insolvency IBC",
+        "Supreme Court India capital gains exemption",
+        "site:main.sci.gov.in judgment",
+        "site:livelaw.in Supreme Court company law",
+        "site:barandbench.com Supreme Court corporate",
+        "site:scconline.com Supreme Court company",
     ], "Supreme Court", results_per=5, delay=2)
 
 
 def fetch_high_courts():
     return google_multi([
-        "Bombay High Court scheme arrangement 2026",
-        "Bombay High Court company petition 2026",
+        "Bombay High Court scheme arrangement",
+        "Bombay High Court company petition",
         "Bombay High Court stamp duty scheme",
         "Bombay High Court family settlement",
         "Bombay High Court writ NCLT",
-        "Delhi High Court scheme arrangement 2026",
-        "Delhi High Court family arrangement 2026",
-        "Delhi High Court company law 2026",
-        "Gujarat High Court scheme arrangement 2026",
+        "Delhi High Court scheme arrangement",
+        "Delhi High Court family arrangement",
+        "Delhi High Court company law",
+        "Gujarat High Court scheme arrangement",
         "Gujarat High Court family settlement stamp duty",
-        "Gujarat High Court company petition 2026",
-        "Karnataka High Court scheme arrangement 2026",
-        "Madras High Court company petition 2026",
-        "Madras High Court scheme arrangement 2026",
-        "Calcutta High Court company petition 2026",
+        "Gujarat High Court company petition",
+        "Karnataka High Court scheme arrangement",
+        "Madras High Court company petition",
+        "Madras High Court scheme arrangement",
+        "Calcutta High Court company petition",
         "Allahabad High Court family arrangement",
-        "Punjab Haryana High Court company petition 2026",
-        "Kerala High Court scheme arrangement 2026",
-        "Telangana High Court company petition 2026",
-        "High Court writ petition NCLT order 2026",
-        "High Court appeal NCLT scheme 2026",
+        "Punjab Haryana High Court company petition",
+        "Kerala High Court scheme arrangement",
+        "Telangana High Court company petition",
+        "High Court writ petition NCLT order",
+        "High Court appeal NCLT scheme",
         "High Court capital gains merger exemption India",
         "High Court stamp duty merger exemption India",
-        "High Court corporate dispute India 2026",
-        "High Court family partition property India 2026",
+        "High Court corporate dispute India",
+        "High Court family partition property India",
     ], "High Court", results_per=3, delay=2)
 
 
@@ -346,13 +403,13 @@ def fetch_sebi():
         time.sleep(1)
     # Supplement with Google
     results.extend(google_multi([
-        "SEBI order 2026 corporate governance",
-        "SEBI order 2026 takeover",
-        "SEBI order 2026 insider trading",
-        "SEBI circular 2026 listing",
-        "SEBI order related party transaction 2026",
-        "SEBI adjudication order 2026",
-        "site:sebi.gov.in order 2026",
+        "SEBI order corporate governance",
+        "SEBI order takeover",
+        "SEBI order insider trading",
+        "SEBI circular listing",
+        "SEBI order related party transaction",
+        "SEBI adjudication order",
+        "site:sebi.gov.in order",
     ], "SEBI (Google)", results_per=3, delay=2))
     logger.info("SEBI total: %d", len(results))
     return results
@@ -360,13 +417,13 @@ def fetch_sebi():
 
 def fetch_sat():
     return google_multi([
-        "SAT order 2026",
-        "Securities Appellate Tribunal order 2026",
-        "SAT SEBI appeal 2026",
+        "SAT order",
+        "Securities Appellate Tribunal order",
+        "SAT SEBI appeal",
         "SAT order takeover open offer",
         "SAT order insider trading",
-        "site:sat.gov.in order 2026",
-        "site:livelaw.in SAT order 2026",
+        "site:sat.gov.in order",
+        "site:livelaw.in SAT order",
     ], "SAT", results_per=3, delay=2)
 
 
@@ -382,16 +439,16 @@ def fetch_itat():
         "ITAT order dissolution section 9B",
         "ITAT order amalgamation tax",
         "ITAT order transfer pricing restructuring",
-        "site:itatonline.org 2026",
-        "site:taxguru.in ITAT order 2026",
-        "site:livelaw.in ITAT order 2026",
+        "site:itatonline.org",
+        "site:taxguru.in ITAT order",
+        "site:livelaw.in ITAT order",
     ], "ITAT", results_per=3, delay=1.5)
 
 
 def fetch_cci():
     return google_multi([
-        "CCI combination approval order 2026",
-        "Competition Commission merger India 2026",
+        "CCI combination approval order",
+        "Competition Commission merger India",
         "CCI order combination review India",
         "site:cci.gov.in combination order",
     ], "CCI", results_per=5, delay=1.5)
@@ -399,61 +456,61 @@ def fetch_cci():
 
 def fetch_mca_ibbi():
     return google_multi([
-        "MCA notification Companies Act 2026",
-        "MCA circular company law 2026",
-        "IBBI circular regulation 2026",
-        "IBBI valuation standard 2026",
-        "site:mca.gov.in notification 2026",
-        "site:ibbi.gov.in circular 2026",
+        "MCA notification Companies Act",
+        "MCA circular company law",
+        "IBBI circular regulation",
+        "IBBI valuation standard",
+        "site:mca.gov.in notification",
+        "site:ibbi.gov.in circular",
     ], "MCA/IBBI", results_per=3, delay=1.5)
 
 
 def fetch_exchange():
     return google_multi([
         # Search for news coverage of exchange filings, not the exchange sites directly
-        "BSE filing scheme of arrangement India 2026",
-        "NSE filing scheme of arrangement India 2026",
-        "BSE filing demerger India 2026",
+        "BSE filing scheme of arrangement India",
+        "NSE filing scheme of arrangement India",
+        "BSE filing demerger India",
         "stock exchange scheme arrangement filing India",
-        "company filed scheme arrangement NCLT 2026",
-        "open offer letter filed SEBI 2026",
-        "delisting offer filed stock exchange India 2026",
-        "composite scheme filed BSE NSE 2026",
-        "corporate action India demerger merger 2026",
-        "scheme of arrangement SEBI no objection 2026",
-        "SEBI observation letter scheme arrangement 2026",
-        "listed company demerger announcement India 2026",
-        "listed company merger announcement India 2026",
-        "listed company open offer announcement India 2026",
-        "promoter open offer India 2026",
-        "voluntary delisting India 2026",
-        "record date demerger India 2026",
-        "entitlement ratio demerger India 2026",
+        "company filed scheme arrangement NCLT",
+        "open offer letter filed SEBI",
+        "delisting offer filed stock exchange India",
+        "composite scheme filed BSE NSE",
+        "corporate action India demerger merger",
+        "scheme of arrangement SEBI no objection",
+        "SEBI observation letter scheme arrangement",
+        "listed company demerger announcement India",
+        "listed company merger announcement India",
+        "listed company open offer announcement India",
+        "promoter open offer India",
+        "voluntary delisting India",
+        "record date demerger India",
+        "entitlement ratio demerger India",
     ], "Exchange / Deal Filings", results_per=3, delay=2)
 
 
 def fetch_newspaper_governance():
     return google_multi([
-        "site:livemint.com boardroom battle 2026",
-        "site:livemint.com promoter family dispute 2026",
-        "site:livemint.com demerger scheme 2026",
-        "site:livemint.com corporate governance 2026",
-        "site:livemint.com company restructuring 2026",
-        "site:livemint.com merger acquisition 2026",
-        "site:livemint.com family business succession 2026",
-        "site:economictimes.indiatimes.com promoter feud 2026",
-        "site:economictimes.indiatimes.com boardroom coup 2026",
-        "site:economictimes.indiatimes.com family business split 2026",
-        "site:economictimes.indiatimes.com M&A deal India 2026",
-        "site:economictimes.indiatimes.com corporate restructuring 2026",
-        "site:business-standard.com family business dispute 2026",
-        "site:business-standard.com promoter restructuring 2026",
-        "site:business-standard.com merger acquisition India 2026",
-        "site:business-standard.com corporate governance 2026",
-        "site:moneycontrol.com boardroom battle 2026",
-        "site:moneycontrol.com promoter dispute 2026",
-        "site:moneycontrol.com merger demerger India 2026",
-        "site:moneycontrol.com corporate restructuring 2026",
+        "site:livemint.com boardroom battle",
+        "site:livemint.com promoter family dispute",
+        "site:livemint.com demerger scheme",
+        "site:livemint.com corporate governance",
+        "site:livemint.com company restructuring",
+        "site:livemint.com merger acquisition",
+        "site:livemint.com family business succession",
+        "site:economictimes.indiatimes.com promoter feud",
+        "site:economictimes.indiatimes.com boardroom coup",
+        "site:economictimes.indiatimes.com family business split",
+        "site:economictimes.indiatimes.com M&A deal India",
+        "site:economictimes.indiatimes.com corporate restructuring",
+        "site:business-standard.com family business dispute",
+        "site:business-standard.com promoter restructuring",
+        "site:business-standard.com merger acquisition India",
+        "site:business-standard.com corporate governance",
+        "site:moneycontrol.com boardroom battle",
+        "site:moneycontrol.com promoter dispute",
+        "site:moneycontrol.com merger demerger India",
+        "site:moneycontrol.com corporate restructuring",
     ], "Business News", results_per=3, delay=2)
 
 
@@ -482,12 +539,12 @@ def fetch_proxy_advisory():
         "proxy advisory opposes merger India",
         "proxy advisory opposes scheme India",
         "proxy advisory flags related party India",
-        "proxy advisory firm India 2026 recommendation",
-        "institutional investor opposes resolution India 2026",
-        "IiAS voting advisory India 2026",
+        "proxy advisory firm India recommendation",
+        "institutional investor opposes resolution India",
+        "IiAS voting advisory India",
         "proxy advisory delisting India",
         "proxy advisory open offer India",
-        "minority shareholders oppose scheme India 2026",
+        "minority shareholders oppose scheme India",
         "institutional shareholder concerns India governance",
     ], "Proxy Advisory", results_per=3, delay=1.5)
 
@@ -542,9 +599,9 @@ SEARCH_QUERIES_TECHNICAL = [
 ]
 
 SEARCH_QUERIES_PLAIN_ENGLISH = [
-    "company merger India 2026",
-    "company demerger India 2026",
-    "corporate restructuring India 2026",
+    "company merger India",
+    "company demerger India",
+    "corporate restructuring India",
     "business restructuring India tax",
     "group restructuring India promoter",
     "family business split India",
@@ -559,9 +616,9 @@ SEARCH_QUERIES_PLAIN_ENGLISH = [
     "share swap merger India",
     "holding subsidiary restructuring India",
     "private equity buyout India",
-    "open offer India 2026",
+    "open offer India SEBI",
     "delisting India promoter",
-    "corporate governance India 2026",
+    "corporate governance India SEBI",
     "boardroom fight India",
     "independent director controversy India",
     "shareholder dispute India",
@@ -573,28 +630,28 @@ SEARCH_QUERIES_PLAIN_ENGLISH = [
     "tax free merger India",
     "succession planning wealthy family India",
     "insolvency promoter family India",
-    "IBC resolution plan India 2026",
+    "IBC resolution plan India",
     "NRI property transfer FEMA India",
     "family trust India tax",
     "wealth planning India trust",
-    "stamp duty merger India 2026",
-    "composite scheme India 2026",
+    "stamp duty merger India",
+    "composite scheme India",
     "appointed date scheme India",
-    "company acquisition India 2026",
-    "takeover India 2026",
+    "company acquisition India",
+    "takeover India SEBI",
 ]
 
 SEARCH_QUERIES_GOVERNANCE = [
-    "boardroom battle India 2026",
+    "boardroom battle India promoter family",
     "promoter family feud listed company India",
     "corporate governance failure SEBI India",
-    "SEBI penalty governance India 2026",
-    "independent director removal India 2026",
-    "shareholder activism India 2026",
-    "proxy advisory India governance 2026",
+    "SEBI penalty governance India",
+    "independent director removal India",
+    "shareholder activism India",
+    "proxy advisory India governance",
     "promoter reclassification SEBI India",
     "EGM requisition India promoter dispute",
-    "board coup India company 2026",
+    "board coup India company",
     "family succession corporate dispute India",
     "pledge enforcement promoter shares India",
 ]
@@ -658,12 +715,68 @@ def log_sweep(source, fetched, relevant, errors=""):
     conn.commit()
     conn.close()
 
+GARBAGE_TITLES = [
+    "nclt", "nclat", "itat", "sat", "sebi", "cci", "mca",
+    "petitioner/respondent search", "cause list", "causelist",
+    "cisco webex", "video conference", "hybrid mode",
+    "objections list", "read all latest updates",
+    "javascript", "login", "sign in", "forgot password",
+    "home page", "search results",
+]
+
+GARBAGE_PDF_KEYWORDS = [
+    "cause list", "causelist", "cause-list",
+    "webex", "video conference", "hybrid mode",
+    "notice board", "schedule", "adjournment",
+    "court 1", "court 2", "court 3", "court 4", "court 5",
+    "objections list", "daily order",
+]
+
+def is_garbage(title, url):
+    """Filter out navigation elements, cause lists, and non-substantive results."""
+    t = title.lower().strip()
+    # Too short to be meaningful
+    if len(t) < 15:
+        return True
+    # Title is just a tribunal/court name with nothing else
+    bare_names = ["nclt", "nclat", "itat", "sat", "sebi", "cci", "mca",
+                  "supreme court", "high court", "national company law tribunal",
+                  "national company law appellate tribunal",
+                  "in the national company law tribunal",
+                  "in the national company law appellate tribunal"]
+    if t in bare_names:
+        return True
+    # Starts with known garbage patterns
+    for g in GARBAGE_TITLES:
+        if t.startswith(g):
+            return True
+    # Spreadsheet files
+    if t.endswith(".xlsx") or t.endswith(".xls") or t.endswith(".csv"):
+        return True
+    # PDF with procedural/junk keywords in title
+    if url.lower().endswith(".pdf"):
+        for kw in GARBAGE_PDF_KEYWORDS:
+            if kw in t:
+                return True
+    # Garbled text (non-ASCII garbage from PDFs)
+    ascii_ratio = sum(1 for c in t if ord(c) < 128) / max(len(t), 1)
+    if ascii_ratio < 0.7:
+        return True
+    return False
+
+
 def process_results(results, label):
     count = 0
     seen = set()
     unique = [r for r in results if r["url"] not in seen and not seen.add(r["url"])]
-    logger.info("%s: %d unique to process", label, len(unique))
-    for result in unique:
+    # Pre-filter garbage before classification
+    clean = [r for r in unique if not is_garbage(r.get("title", ""), r.get("url", ""))]
+    skipped = len(unique) - len(clean)
+    if skipped > 0:
+        logger.info("%s: %d unique, %d skipped as garbage, %d to classify", label, len(unique), skipped, len(clean))
+    else:
+        logger.info("%s: %d unique to process", label, len(clean))
+    for result in clean:
         jid = generate_id(result["title"], result["url"])
         if is_already_processed(jid):
             continue
@@ -679,7 +792,7 @@ def process_results(results, label):
             count += 1
             logger.info("  RELEVANT: %s [%s]", result["title"][:80], cls.get("relevance_score",""))
         time.sleep(0.3)
-    log_sweep(label, len(unique), count)
+    log_sweep(label, len(clean), count)
     return count
 
 
