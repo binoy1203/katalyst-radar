@@ -1,7 +1,6 @@
 """
-Katalyst Judgment Radar v5
-Comprehensive legal, regulatory, and transaction intelligence system.
-10 taxonomy categories. 50+ sources. 8 sweep phases.
+Katalyst Judgment Radar v5 (Updated)
+Wider searches. Liberal classification. Short summaries.
 """
 
 import os
@@ -56,168 +55,143 @@ def init_db():
     logger.info("Database initialized at %s", DB_PATH)
 
 
-# ---------------------------------------------------------------------------
-# 10-Category Classification Prompt
-# ---------------------------------------------------------------------------
+CLASSIFICATION_PROMPT = """You are a classification engine for Katalyst Advisors, an M&A and transaction structuring advisory firm in India. Your job is to determine if a judgment, order, article, or news report has ANY relevance to the firm's practice.
 
-CLASSIFICATION_PROMPT = """You are a legal classification engine for an M&A and transaction structuring advisory firm in India (Katalyst Advisors). Classify the given text against this taxonomy.
+IMPORTANT: Be LIBERAL in classifying. If there is any reasonable connection to M&A, corporate restructuring, family business, corporate governance, taxation of transactions, regulatory action on companies, or deal-related activity, classify it as relevant. When in doubt, include it. It is better to include a borderline result than to miss something useful.
 
 CATEGORIES:
 
-1. SCHEMES OF ARRANGEMENT (Companies Act 2013, Sections 230-232, 66)
-   amalgamations, demergers, composite schemes, capital reductions, NCLT sanctions, appointed dates, class meetings, valuation in schemes
-
-2. FAMILY ARRANGEMENT AND SETTLEMENT
-   family settlement deeds, partition disputes, Hindu Succession Act, Indian Succession Act, family arrangements via corporate structures
-
-3. INCOME TAX (Succession and Restructuring)
-   Section 2(19AA) demerger, Section 47 exemptions, Section 56(2)(x) deemed gifts, Section 45(4)/9B firm reconstitution, Section 50D FMV, Section 171 HUF partition, Section 50B slump sales, capital gains on family transfers
-
-4. SEBI AND SECURITIES LAW
-   Regulation 10 inter se transfers, open offer exemptions, Regulation 23 RPTs, Regulation 37 schemes, delisting, SAT orders, change of control
-
-5. STAMP DUTY AND REGISTRATION
-   family arrangements as conveyances, stamp duty on schemes, state exemptions, registration requirements
-
-6. FEMA AND CROSS-BORDER
-   FEMA pricing guidelines for family transfers with NRIs, RBI compounding orders, LRS and inheritance
-
-7. TRUST LAW AND SUCCESSION VEHICLES
-   private trusts, Sections 60-64 revocable transfers, Sections 161-164 trust taxation, trust distributions
-
-8. INSOLVENCY INTERSECTION
-   Section 29A related party, oppression/mismanagement Sections 241-244 in family disputes, IBC in family companies
-
-9. BOARDROOM BATTLES AND CORPORATE GOVERNANCE
-   promoter feuds, boardroom coups, director removals, EGM requisitions, shareholder activism, SEBI governance enforcement, minority oppression, proxy fights, promoter reclassification, pledge enforcement
-
-10. TRANSACTION ACCOUNTING AND IND AS
-    Ind AS 103 business combinations, common control transactions, Ind AS 110 consolidation, Ind AS 27 separate financial statements, Ind AS 12 deferred tax on restructurings, Ind AS 113 fair value measurement, purchase price allocation, ICAI EAC opinions on scheme accounting, opening balance sheet treatment, goodwill and bargain purchase in M&A
+1. SCHEMES OF ARRANGEMENT: amalgamations, mergers, demergers, composite schemes, capital reductions, NCLT/NCLAT orders on schemes, appointed dates, class meetings, valuation disputes
+2. FAMILY ARRANGEMENT: family settlements, partitions, HUF disputes, succession disputes, family business splits, will contests, inheritance disputes involving business assets
+3. INCOME TAX: any tax ruling touching M&A, restructuring, capital gains on transfers, slump sales, demerger tax treatment, gift tax, deemed income, firm reconstitution, trust taxation, HUF taxation
+4. SEBI / SECURITIES: takeover regulations, open offers, inter se transfers, RPTs, insider trading in context of restructuring, delisting, scheme-related SEBI orders, promoter reclassification
+5. STAMP DUTY: stamp duty on transfers, schemes, conveyances, family arrangements, state-level rulings
+6. FEMA / CROSS-BORDER: any FEMA ruling or article on cross-border transfers, NRI transactions, FDI in restructuring, RBI directions
+7. TRUST LAW: private trusts, charitable trusts in business context, trust taxation, settlor-beneficiary disputes
+8. INSOLVENCY: IBC matters involving promoter families, Section 29A, oppression and mismanagement, resolution plans, liquidation of family companies
+9. BOARDROOM / GOVERNANCE: promoter disputes, board-level fights, director removals, EGM battles, shareholder activism, SEBI governance enforcement, proxy advisory actions, corporate governance failures
+10. IND AS / ACCOUNTING: business combination accounting, Ind AS 103, common control, consolidation, fair value, purchase price allocation, EAC opinions, accounting for schemes
 
 Respond with JSON only (no markdown, no backticks):
 {
   "relevant": true/false,
   "relevance_score": "high" | "medium" | "low",
   "categories": [category numbers],
-  "category_names": [category names],
-  "sections_engaged": [specific sections/regulations/standards],
-  "court_or_tribunal": "court/tribunal/regulator or 'News Report' or 'Advisory/Article'",
+  "category_names": [names],
+  "sections_engaged": [specific sections/regulations/standards if mentioned],
+  "court_or_tribunal": "source court/tribunal/regulator or 'News' or 'Article'",
   "date_decided": "date or null",
-  "parties": "party/company names or null",
-  "structural_mechanism": "brief description of structure or issue",
-  "practitioner_note": "2-3 sentences for a senior M&A structuring partner on WHY this matters. For news, flag the structural vulnerability and advisory opportunity. Write as a peer."
+  "parties": "names or null",
+  "summary": "One to two line summary of what this is about and why it matters."
 }
 
 If NOT relevant: {"relevant": false, "relevance_score": "none", "reason": "brief reason"}
 
-TEXT TO CLASSIFY:
+TEXT:
 """
 
-
 # ---------------------------------------------------------------------------
-# Search Queries
+# Search Queries: Technical + Plain English + Broad
 # ---------------------------------------------------------------------------
 
-SEARCH_QUERIES_NARROW = [
+SEARCH_QUERIES_TECHNICAL = [
     "scheme of arrangement NCLT 2026",
-    "demerger scheme NCLT order 2026",
-    "amalgamation scheme NCLT 2026",
-    "composite scheme demerger amalgamation",
-    "capital reduction section 66 NCLT",
-    "family arrangement settlement deed judgment",
-    "family settlement partition High Court",
-    "Hindu Succession coparcenary partition",
-    "section 2(19AA) demerger ITAT",
-    "section 47 exemption amalgamation ITAT",
-    "section 56(2)(x) deemed gift tribunal",
-    "section 45(4) reconstitution firm ITAT",
-    "slump sale section 50B ITAT 2026",
+    "demerger scheme NCLT order",
+    "amalgamation NCLT order",
+    "section 230 Companies Act scheme",
+    "section 232 Companies Act amalgamation",
+    "section 66 capital reduction NCLT",
+    "section 2(19AA) demerger",
+    "section 47 exemption amalgamation transfer",
+    "section 56(2)(x) deemed gift",
+    "section 45(4) reconstitution firm",
+    "section 9B dissolution partnership LLP",
+    "section 50B slump sale",
+    "section 50D fair market value",
+    "section 171 HUF partition",
+    "section 47(iii) gift transfer",
     "SEBI regulation 10 inter se transfer",
-    "open offer exemption SAT order",
-    "stamp duty scheme arrangement High Court",
-    "FEMA share transfer NRI family",
-    "private trust capital gains ITAT",
+    "SEBI regulation 23 related party",
+    "SEBI regulation 37 scheme listing",
+    "SEBI takeover code open offer",
     "section 29A IBC related party",
-    "oppression mismanagement NCLT family",
+    "section 241 oppression mismanagement",
+    "Ind AS 103 business combination",
+    "Ind AS 110 consolidation",
+    "Ind AS 12 deferred tax",
+    "Ind AS 113 fair value",
 ]
 
-SEARCH_QUERIES_BROAD = [
-    "NCLT scheme of arrangement order",
-    "NCLAT appeal scheme amalgamation",
-    "demerger tax neutrality judgment India",
-    "family business partition judgment India",
-    "HUF partition capital gains",
-    "listed company promoter restructuring SEBI",
-    "delisting regulation family group",
-    "trust taxation India ITAT",
-    "LLP reconstitution tax",
-    "section 9B dissolution partnership",
-    "appointed date scheme arrangement NCLT",
-    "valuation scheme arrangement",
-    "related party transaction SEBI order",
-    "stamp duty exemption amalgamation",
-    "succession planning India trust",
-    "family settlement registration requirement",
-    "cross border merger India NCLT",
-    "FEMA pricing guidelines share transfer",
-    "RBI compounding order FEMA",
-    "IBC resolution plan family company",
+SEARCH_QUERIES_PLAIN_ENGLISH = [
+    "company merger India",
+    "company demerger India",
+    "corporate restructuring India",
+    "business restructuring India tax",
+    "group restructuring India",
+    "family business split India",
+    "family business dispute India",
+    "family business succession India",
+    "promoter family fight India",
+    "promoter shareholding change India",
+    "promoter group restructuring",
+    "listed company restructuring India",
+    "business transfer agreement India",
+    "slump sale India deal",
+    "asset sale company India",
+    "share swap merger India",
+    "holding subsidiary restructuring India",
+    "private equity buyout India",
+    "open offer SEBI India",
+    "delisting India promoter",
+    "corporate governance India SEBI action",
+    "boardroom fight India",
+    "independent director India controversy",
+    "shareholder dispute India",
+    "minority shareholder India rights",
+    "related party transaction India abuse",
+    "NCLT order India latest",
+    "NCLAT judgment India latest",
+    "tax tribunal India restructuring",
+    "stamp duty merger India",
+    "NRI property transfer India FEMA",
+    "trust wealth planning India",
+    "family trust India tax",
+    "business valuation India dispute",
+    "fair value dispute India company",
+    "capital gains exemption India merger",
+    "tax free merger India",
+    "succession planning India wealthy family",
+    "insolvency India promoter family",
+    "IBC resolution plan India",
 ]
 
 SEARCH_QUERIES_GOVERNANCE = [
-    "boardroom battle India promoter family",
-    "promoter family feud listed company India",
-    "corporate governance failure India SEBI",
+    "boardroom battle India 2026",
+    "promoter family feud listed company",
+    "corporate governance failure India",
+    "SEBI penalty corporate governance",
     "independent director removal India",
-    "oppression mismanagement petition NCLT 2026",
-    "shareholder activism India proxy fight",
-    "promoter group infighting listed company",
-    "family succession dispute corporate India",
-    "SEBI corporate governance violation order",
-    "minority shareholder oppression India judgment",
-    "related party transaction abuse SEBI penalty",
+    "shareholder activism India",
+    "proxy advisory India governance",
     "promoter reclassification SEBI",
-    "family split demerger listed company India",
-    "succession battle Indian business family",
-    "group company restructuring family dispute India",
-    "EGM requisition promoter fight India",
-    "NCLT oppression petition family business 2026",
+    "EGM requisition India promoter",
+    "board coup India company",
+    "chairman removal India company",
+    "family succession corporate India",
 ]
 
 SEARCH_QUERIES_INDAS = [
     "Ind AS 103 business combination India",
     "common control transaction accounting India",
-    "Ind AS 103 amalgamation pooling interest",
-    "purchase price allocation India Ind AS",
-    "Ind AS 110 consolidation restructuring",
-    "deferred tax business combination Ind AS 12",
-    "ICAI EAC opinion scheme arrangement accounting",
-    "Ind AS 113 fair value measurement transaction",
-    "goodwill impairment business combination India",
-    "opening balance sheet demerger accounting",
-    "Ind AS 27 separate financial statements restructuring",
-    "bargain purchase negative goodwill Ind AS",
-    "contingent consideration Ind AS 103",
-    "ICAI guidance note amalgamation accounting",
+    "purchase price allocation India",
+    "deferred tax business combination India",
+    "ICAI EAC opinion scheme",
+    "goodwill impairment India Ind AS",
+    "opening balance sheet demerger",
+    "accounting amalgamation India",
+    "fair value measurement India Ind AS 113",
 ]
 
-SEARCH_QUERIES_REGULATORY = [
-    "CCI combination approval order 2026",
-    "Competition Commission merger control India",
-    "MCA notification Companies Act amendment 2026",
-    "IBBI circular valuation IBC",
-    "IBBI registered valuer regulation",
-    "SEBI consultation paper 2026",
-    "SEBI working group report",
-    "BSE scheme arrangement announcement",
-    "NSE corporate announcement demerger",
-    "stock exchange open offer announcement India",
-]
-
-
-# ---------------------------------------------------------------------------
-# Utility Functions
-# ---------------------------------------------------------------------------
 
 def safe_get(url, timeout=30):
     try:
@@ -270,7 +244,6 @@ def fetch_rss_feed(feed_url, source_name):
 
 
 def scrape_links(url, source_name, min_title_len=15, href_filter=None):
-    """Generic link scraper for court/tribunal websites."""
     results = []
     try:
         resp = safe_get(url)
@@ -299,13 +272,7 @@ def fetch_full_text(url):
     return ""
 
 
-# ---------------------------------------------------------------------------
-# Source Fetchers
-# ---------------------------------------------------------------------------
-
-# RSS Feeds (legal + newspapers + accounting)
 RSS_FEEDS = [
-    # Legal
     ("https://www.livelaw.in/feed", "LiveLaw"),
     ("https://www.barandbench.com/feed", "Bar and Bench"),
     ("https://www.taxmann.com/post/blog/feed/", "Taxmann"),
@@ -319,10 +286,8 @@ RSS_FEEDS = [
     ("https://taxguru.in/sebi/feed", "TaxGuru SEBI"),
     ("https://www.livelaw.in/tax-cases/feed", "LiveLaw Tax"),
     ("https://www.livelaw.in/corporate-law/feed", "LiveLaw Corporate"),
-    # Law firm blogs
     ("https://www.nishithdesai.com/feed", "Nishith Desai"),
     ("https://erfrequently.com/feed/", "ER Frequently (S&R)"),
-    # Newspapers
     ("https://www.livemint.com/rss/companies", "Livemint Companies"),
     ("https://www.livemint.com/rss/money", "Livemint Money"),
     ("https://economictimes.indiatimes.com/rssfeedstopstories.cms", "Economic Times"),
@@ -333,7 +298,6 @@ RSS_FEEDS = [
     ("https://www.financialexpress.com/feed/", "Financial Express"),
     ("https://www.thehindubusinessline.com/companies/feeder/default.rss", "Hindu BusinessLine"),
     ("https://www.fortuneindia.com/rss/enterprise", "Fortune India"),
-    # Accounting / Ind AS
     ("https://www.icai.org/rss/rss_feed.html", "ICAI"),
 ]
 
@@ -387,53 +351,47 @@ def fetch_nclt_all_benches():
         ("https://nclt.gov.in/order-judgment-by-bench/amaravati-bench", "NCLT Amaravati"),
     ]
     for bench_url, bench_name in benches:
-        logger.info("  Fetching %s...", bench_name)
+        logger.info("  %s...", bench_name)
         bench_results = scrape_links(bench_url, bench_name, href_filter=lambda h: "order" in h.lower() or "judgment" in h.lower() or ".pdf" in h.lower())
         results.extend(bench_results)
         time.sleep(1)
-    logger.info("NCLT total: %d results from %d benches", len(results), len(benches))
+    logger.info("NCLT total: %d", len(results))
     return results
 
 
 def fetch_nclat():
-    results = scrape_links("https://nclat.nic.in/?page_id=585", "NCLAT",
-                           href_filter=lambda h: ".pdf" in h.lower() or "order" in h.lower())
-    logger.info("NCLAT: %d results", len(results))
-    return results
-
+    r = scrape_links("https://nclat.nic.in/?page_id=585", "NCLAT", href_filter=lambda h: ".pdf" in h.lower() or "order" in h.lower())
+    logger.info("NCLAT: %d", len(r))
+    return r
 
 def fetch_supreme_court():
-    results = scrape_links("https://main.sci.gov.in/judgments", "Supreme Court",
-                           href_filter=lambda h: "judgment" in h.lower() or ".pdf" in h.lower() or "jonew" in h.lower())
-    logger.info("Supreme Court: %d results", len(results))
-    return results
-
+    r = scrape_links("https://main.sci.gov.in/judgments", "Supreme Court", href_filter=lambda h: "judgment" in h.lower() or ".pdf" in h.lower() or "jonew" in h.lower())
+    logger.info("SC: %d", len(r))
+    return r
 
 def fetch_high_courts():
-    """Fetch from all major High Court websites via Google search."""
     results = []
     hc_queries = [
-        "site:bombayhighcourt.nic.in scheme arrangement demerger",
+        "site:bombayhighcourt.nic.in scheme arrangement",
         "site:bombayhighcourt.nic.in family settlement stamp duty",
+        "site:bombayhighcourt.nic.in company petition",
         "site:delhihighcourt.nic.in scheme arrangement",
-        "site:delhihighcourt.nic.in family arrangement partition",
-        "site:ghconline.gov.in scheme arrangement stamp duty",
+        "site:delhihighcourt.nic.in family arrangement",
+        "site:delhihighcourt.nic.in company law",
+        "site:ghconline.gov.in scheme arrangement",
         "site:ghconline.gov.in family settlement",
         "site:karnatakajudiciary.kar.nic.in scheme arrangement",
-        "site:karnatakajudiciary.kar.nic.in family partition",
         "site:highcourtofkerala.nic.in scheme arrangement",
         "site:allahabadhighcourt.in family arrangement",
-        "site:phc.gov.in scheme arrangement",
-        "site:mhc.tn.gov.in scheme arrangement demerger",
-        "site:highcourtchd.gov.in scheme arrangement",
-        "site:jharkhandhighcourt.nic.in family partition",
-        "site:cghighcourt.nic.in scheme arrangement",
-        # General High Court searches
-        "High Court scheme arrangement demerger order 2026 India",
-        "High Court family settlement partition judgment 2026",
-        "High Court stamp duty scheme arrangement 2026",
-        "High Court section 47 capital gains exemption amalgamation",
-        "High Court writ NCLT scheme arrangement",
+        "site:mhc.tn.gov.in scheme arrangement",
+        "site:mhc.tn.gov.in company petition",
+        "High Court scheme arrangement order India 2026",
+        "High Court family settlement judgment India 2026",
+        "High Court stamp duty scheme 2026",
+        "High Court company petition restructuring 2026",
+        "High Court writ petition NCLT 2026",
+        "High Court capital gains exemption merger 2026",
+        "High Court corporate dispute India 2026",
     ]
     for q in hc_queries:
         g_results = fetch_google_search(q, 3)
@@ -441,226 +399,104 @@ def fetch_high_courts():
             r["source"] = "High Court (via Google)"
             results.append(r)
         time.sleep(2)
-    logger.info("High Courts: %d results via Google", len(results))
+    logger.info("High Courts: %d", len(results))
     return results
-
 
 def fetch_sebi():
     results = []
-    urls = [
+    for sebi_url, name in [
         ("https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=1&ssid=2&smid=0", "SEBI Orders"),
         ("https://www.sebi.gov.in/sebiweb/home/HomeAction.do?doListing=yes&sid=2&ssid=9&smid=0", "SEBI Circulars"),
-    ]
-    for sebi_url, source_name in urls:
-        r = scrape_links(sebi_url, source_name, min_title_len=15)
-        results.extend(r)
+    ]:
+        results.extend(scrape_links(sebi_url, name, min_title_len=15))
         time.sleep(1)
-    logger.info("SEBI: %d results", len(results))
+    logger.info("SEBI: %d", len(results))
     return results
-
 
 def fetch_sat():
-    results = scrape_links("https://sat.gov.in/english/orders.htm", "SAT",
-                           href_filter=lambda h: ".pdf" in h.lower() or "order" in h.lower())
-    logger.info("SAT: %d results", len(results))
-    return results
-
+    r = scrape_links("https://sat.gov.in/english/orders.htm", "SAT", href_filter=lambda h: ".pdf" in h.lower() or "order" in h.lower())
+    logger.info("SAT: %d", len(r))
+    return r
 
 def fetch_itat():
     results = []
-    queries = [
-        "site:itatonline.org demerger section 2(19AA)",
-        "site:itatonline.org slump sale section 50B",
-        "site:itatonline.org family partition HUF",
-        "site:itatonline.org trust taxation section 161",
-        "site:itatonline.org capital gains section 47",
-        "site:itatonline.org section 56(2)(x) gift",
-        "site:itatonline.org section 45(4) reconstitution",
-        "site:itatonline.org section 9B dissolution",
-    ]
-    for q in queries:
-        g_results = fetch_google_search(q, 3)
-        for r in g_results:
+    for q in ["site:itatonline.org demerger", "site:itatonline.org slump sale", "site:itatonline.org family partition",
+              "site:itatonline.org trust taxation", "site:itatonline.org capital gains exemption",
+              "site:itatonline.org deemed gift", "site:itatonline.org reconstitution", "site:itatonline.org dissolution"]:
+        for r in fetch_google_search(q, 3):
             r["source"] = "ITAT (via Google)"
             results.append(r)
         time.sleep(1)
-    logger.info("ITAT: %d results", len(results))
+    logger.info("ITAT: %d", len(results))
     return results
 
-
 def fetch_cci():
-    """Fetch CCI combination/merger orders."""
     results = []
-    queries = [
-        "site:cci.gov.in combination order 2026",
-        "site:cci.gov.in merger approval order",
-        "Competition Commission India combination approval 2026",
-    ]
-    for q in queries:
-        g_results = fetch_google_search(q, 5)
-        for r in g_results:
+    for q in ["CCI combination approval order India 2026", "Competition Commission merger India 2026", "site:cci.gov.in combination order"]:
+        for r in fetch_google_search(q, 5):
             r["source"] = "CCI"
             results.append(r)
         time.sleep(1.5)
-    logger.info("CCI: %d results", len(results))
+    logger.info("CCI: %d", len(results))
     return results
 
-
 def fetch_mca_ibbi():
-    """Fetch MCA notifications and IBBI circulars."""
     results = []
-    queries = [
-        "site:mca.gov.in notification Companies Act 2026",
-        "site:mca.gov.in circular companies 2026",
-        "site:ibbi.gov.in circular regulation 2026",
-        "site:ibbi.gov.in valuation standard",
-        "MCA notification companies act amendment 2026",
-        "IBBI circular insolvency valuation 2026",
-    ]
-    for q in queries:
-        g_results = fetch_google_search(q, 3)
-        for r in g_results:
+    for q in ["MCA notification Companies Act 2026", "IBBI circular valuation 2026", "site:mca.gov.in notification 2026", "site:ibbi.gov.in circular 2026"]:
+        for r in fetch_google_search(q, 3):
             r["source"] = "MCA/IBBI"
             results.append(r)
         time.sleep(1.5)
-    logger.info("MCA/IBBI: %d results", len(results))
+    logger.info("MCA/IBBI: %d", len(results))
     return results
 
-
-def fetch_exchange_announcements():
-    """Fetch BSE/NSE corporate announcements on schemes and restructurings."""
+def fetch_exchange():
     results = []
-    queries = [
-        "site:bseindia.com scheme arrangement announcement",
-        "site:bseindia.com demerger announcement",
-        "site:nseindia.com scheme arrangement corporate announcement",
-        "site:nseindia.com open offer announcement",
-        "BSE corporate announcement scheme demerger 2026",
-        "NSE corporate announcement amalgamation 2026",
-    ]
-    for q in queries:
-        g_results = fetch_google_search(q, 3)
-        for r in g_results:
+    for q in ["BSE scheme demerger announcement 2026", "NSE amalgamation announcement 2026", "BSE open offer announcement 2026"]:
+        for r in fetch_google_search(q, 3):
             r["source"] = "Stock Exchange"
             results.append(r)
         time.sleep(1.5)
-    logger.info("Exchange announcements: %d results", len(results))
+    logger.info("Exchange: %d", len(results))
     return results
-
-
-def fetch_indas_accounting():
-    """Fetch Ind AS and accounting related content."""
-    results = []
-    queries = SEARCH_QUERIES_INDAS
-    for q in queries:
-        g_results = fetch_google_search(q, 3)
-        results.extend(g_results)
-        time.sleep(1.5)
-    # Also search accounting firm publications
-    firm_queries = [
-        "site:deloitte.com/in Ind AS business combination",
-        "site:pwc.in Ind AS accounting update",
-        "site:ey.com/en_in Ind AS transaction accounting",
-        "site:kpmg.com/in Ind AS first notes",
-        "ICAI EAC opinion scheme arrangement accounting",
-        "ICAI guidance note amalgamation accounting Ind AS",
-    ]
-    for q in firm_queries:
-        g_results = fetch_google_search(q, 3)
-        for r in g_results:
-            r["source"] = "Accounting Advisory"
-            results.append(r)
-        time.sleep(1.5)
-    logger.info("Ind AS/Accounting: %d results", len(results))
-    return results
-
-
-def fetch_proxy_advisory():
-    """Fetch proxy advisory and governance reports."""
-    results = []
-    queries = [
-        "site:iiasadvisory.com governance report",
-        "site:sesgovernance.com corporate governance",
-        "site:ingovern.com governance advisory",
-        "IiAS proxy advisory related party transaction India",
-        "proxy advisory firm India corporate governance report 2026",
-    ]
-    for q in queries:
-        g_results = fetch_google_search(q, 3)
-        for r in g_results:
-            r["source"] = "Proxy Advisory"
-            results.append(r)
-        time.sleep(1.5)
-    logger.info("Proxy advisory: %d results", len(results))
-    return results
-
 
 def fetch_newspaper_governance():
     results = []
-    site_queries = [
-        ("site:livemint.com", [
-            "boardroom battle promoter family 2026",
-            "demerger scheme arrangement 2026",
-            "family business succession dispute 2026",
-            "SEBI corporate governance penalty 2026",
-            "promoter shareholding restructuring 2026",
-        ]),
-        ("site:economictimes.indiatimes.com", [
-            "promoter family feud company 2026",
-            "boardroom coup India 2026",
-            "family business split demerger 2026",
-            "corporate governance violation India 2026",
-        ]),
-        ("site:business-standard.com", [
-            "family business dispute India 2026",
-            "promoter group restructuring 2026",
-            "independent director removal 2026",
-            "SEBI enforcement corporate governance 2026",
-        ]),
-        ("site:moneycontrol.com", [
-            "boardroom battle India 2026",
-            "promoter family dispute listed company 2026",
-            "succession planning Indian promoter 2026",
-        ]),
-    ]
-    for site_prefix, queries in site_queries:
+    for site, queries in [
+        ("site:livemint.com", ["boardroom battle 2026", "promoter family dispute 2026", "demerger scheme 2026", "corporate governance 2026", "company restructuring 2026"]),
+        ("site:economictimes.indiatimes.com", ["promoter feud 2026", "boardroom coup 2026", "family business split 2026", "M&A deal India 2026", "corporate restructuring 2026"]),
+        ("site:business-standard.com", ["family business dispute 2026", "promoter restructuring 2026", "SEBI governance 2026", "merger acquisition India 2026"]),
+        ("site:moneycontrol.com", ["boardroom battle 2026", "promoter dispute 2026", "merger demerger India 2026"]),
+    ]:
         for q in queries:
-            full_query = site_prefix + " " + q
-            g_results = fetch_google_search(full_query, 3)
-            for r in g_results:
-                r["source"] = "Business News (Google)"
+            for r in fetch_google_search(site + " " + q, 3):
+                r["source"] = "Business News"
                 results.append(r)
             time.sleep(2)
-    logger.info("Newspaper governance: %d results", len(results))
+    logger.info("Newspaper: %d", len(results))
     return results
 
-
 def fetch_law_firm_blogs():
-    """Fetch from major law firm blogs via Google."""
     results = []
-    firms = [
-        "site:azbpartners.com",
-        "site:khaitanco.com",
-        "site:trilegal.com",
-        "site:nishithdesai.com",
-        "site:cyrilamarchandblogs.com",
-        "site:singhassociates.in",
-    ]
-    topics = ["scheme arrangement demerger", "family settlement", "SEBI takeover", "M&A India 2026"]
-    for firm in firms:
-        for topic in topics:
-            g_results = fetch_google_search(firm + " " + topic, 2)
-            for r in g_results:
+    for firm in ["site:azbpartners.com", "site:khaitanco.com", "site:trilegal.com", "site:nishithdesai.com", "site:cyrilamarchandblogs.com"]:
+        for topic in ["scheme arrangement", "family settlement", "SEBI takeover", "M&A India", "corporate restructuring", "tax restructuring"]:
+            for r in fetch_google_search(firm + " " + topic, 2):
                 r["source"] = "Law Firm Blog"
                 results.append(r)
             time.sleep(1.5)
-    logger.info("Law firm blogs: %d results", len(results))
+    logger.info("Law firms: %d", len(results))
     return results
 
+def fetch_proxy_advisory():
+    results = []
+    for q in ["IiAS proxy advisory India 2026", "InGovern governance India 2026", "proxy advisory related party India"]:
+        for r in fetch_google_search(q, 3):
+            r["source"] = "Proxy Advisory"
+            results.append(r)
+        time.sleep(1.5)
+    logger.info("Proxy: %d", len(results))
+    return results
 
-# ---------------------------------------------------------------------------
-# Classification
-# ---------------------------------------------------------------------------
 
 def classify_judgment(text, title=""):
     if not ANTHROPIC_API_KEY:
@@ -670,16 +506,8 @@ def classify_judgment(text, title=""):
     try:
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-            },
-            json={
-                "model": CLAUDE_MODEL,
-                "max_tokens": 1024,
-                "messages": [{"role": "user", "content": CLASSIFICATION_PROMPT + combined_text}],
-            },
+            headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
+            json={"model": CLAUDE_MODEL, "max_tokens": 512, "messages": [{"role": "user", "content": CLASSIFICATION_PROMPT + combined_text}]},
             timeout=60,
         )
         if resp.status_code == 200:
@@ -700,14 +528,8 @@ def classify_judgment(text, title=""):
         return None
 
 
-# ---------------------------------------------------------------------------
-# Core Sweep Logic
-# ---------------------------------------------------------------------------
-
 def generate_id(title, url):
-    raw = title + "|" + url
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
+    return hashlib.sha256((title + "|" + url).encode()).hexdigest()[:16]
 
 def is_already_processed(judgment_id):
     conn = sqlite3.connect(DB_PATH)
@@ -716,7 +538,6 @@ def is_already_processed(judgment_id):
     conn.close()
     return exists
 
-
 def save_judgment(judgment_id, raw, classification):
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""INSERT OR REPLACE INTO judgments
@@ -724,29 +545,21 @@ def save_judgment(judgment_id, raw, classification):
          full_text_snippet, categories, sections, relevance_score,
          practitioner_note, raw_classification)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (judgment_id, raw.get("title", "Unknown"),
-         classification.get("court_or_tribunal", ""),
-         classification.get("date_decided", ""),
-         datetime.utcnow().isoformat(),
-         raw.get("source", ""), raw.get("url", ""),
-         raw.get("snippet", "")[:500],
-         json.dumps(classification.get("categories", [])),
-         json.dumps(classification.get("sections_engaged", [])),
-         classification.get("relevance_score", ""),
-         classification.get("practitioner_note", ""),
+        (judgment_id, raw.get("title", "Unknown"), classification.get("court_or_tribunal", ""),
+         classification.get("date_decided", ""), datetime.utcnow().isoformat(),
+         raw.get("source", ""), raw.get("url", ""), raw.get("snippet", "")[:500],
+         json.dumps(classification.get("categories", [])), json.dumps(classification.get("sections_engaged", [])),
+         classification.get("relevance_score", ""), classification.get("summary", classification.get("practitioner_note", "")),
          json.dumps(classification)))
     conn.commit()
     conn.close()
 
-
 def log_sweep(source, fetched, relevant, errors=""):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("""INSERT INTO sweep_log (sweep_time, source, results_fetched, results_relevant, errors)
-        VALUES (?, ?, ?, ?, ?)""",
+    conn.execute("INSERT INTO sweep_log (sweep_time, source, results_fetched, results_relevant, errors) VALUES (?, ?, ?, ?, ?)",
         (datetime.utcnow().isoformat(), source, fetched, relevant, errors))
     conn.commit()
     conn.close()
-
 
 def process_results(results, source_label):
     relevant_count = 0
@@ -778,71 +591,64 @@ def process_results(results, source_label):
 
 
 def run_sweep():
-    logger.info("=== STARTING v5 COMPREHENSIVE SWEEP at %s ===", datetime.utcnow().isoformat())
+    logger.info("=== STARTING v5-UPDATED SWEEP at %s ===", datetime.utcnow().isoformat())
     total_relevant = 0
 
-    logger.info("--- Phase 1: RSS Feeds (Legal + News + Accounting) ---")
+    logger.info("--- Phase 1: RSS Feeds ---")
     rss_results = []
     for feed_url, source_name in RSS_FEEDS:
         logger.info("Fetching %s...", source_name)
-        results = fetch_rss_feed(feed_url, source_name)
-        rss_results.extend(results)
+        rss_results.extend(fetch_rss_feed(feed_url, source_name))
         time.sleep(0.5)
     total_relevant += process_results(rss_results, "RSS Feeds")
 
-    logger.info("--- Phase 2: Indian Kanoon ---")
+    logger.info("--- Phase 2: Indian Kanoon (technical) ---")
     ik_results = []
-    for query in SEARCH_QUERIES_NARROW:
-        results = fetch_indian_kanoon(query)
-        ik_results.extend(results)
+    for query in SEARCH_QUERIES_TECHNICAL:
+        ik_results.extend(fetch_indian_kanoon(query))
         time.sleep(1.5)
-    total_relevant += process_results(ik_results, "Indian Kanoon")
+    total_relevant += process_results(ik_results, "Indian Kanoon Technical")
 
-    logger.info("--- Phase 3: Courts and Tribunals ---")
-    logger.info("Fetching all NCLT benches (14)...")
+    logger.info("--- Phase 3: Courts ---")
+    logger.info("NCLT (14 benches)...")
     total_relevant += process_results(fetch_nclt_all_benches(), "NCLT")
-    logger.info("Fetching NCLAT...")
+    logger.info("NCLAT...")
     total_relevant += process_results(fetch_nclat(), "NCLAT")
-    logger.info("Fetching Supreme Court...")
+    logger.info("Supreme Court...")
     total_relevant += process_results(fetch_supreme_court(), "Supreme Court")
-    logger.info("Fetching all High Courts...")
+    logger.info("High Courts...")
     total_relevant += process_results(fetch_high_courts(), "High Courts")
-    logger.info("Fetching SEBI...")
+    logger.info("SEBI...")
     total_relevant += process_results(fetch_sebi(), "SEBI")
-    logger.info("Fetching SAT...")
+    logger.info("SAT...")
     total_relevant += process_results(fetch_sat(), "SAT")
-    logger.info("Fetching ITAT...")
+    logger.info("ITAT...")
     total_relevant += process_results(fetch_itat(), "ITAT")
-    logger.info("Fetching CCI...")
+    logger.info("CCI...")
     total_relevant += process_results(fetch_cci(), "CCI")
 
-    logger.info("--- Phase 4: Regulatory (MCA, IBBI, Exchanges) ---")
+    logger.info("--- Phase 4: Regulatory ---")
     total_relevant += process_results(fetch_mca_ibbi(), "MCA/IBBI")
-    total_relevant += process_results(fetch_exchange_announcements(), "Exchanges")
+    total_relevant += process_results(fetch_exchange(), "Exchanges")
 
-    logger.info("--- Phase 5: Ind AS and Transaction Accounting ---")
-    total_relevant += process_results(fetch_indas_accounting(), "Ind AS")
-
-    logger.info("--- Phase 6: Google Legal News + Broad Search ---")
-    google_results = []
-    queries = SEARCH_QUERIES_BROAD + [
-        "NCLT scheme arrangement order 2026",
-        "NCLT demerger order 2026",
-        "family arrangement judgment India 2026",
-        "ITAT demerger slump sale 2026",
-        "SEBI open offer exemption order 2026",
-    ]
-    for q in queries:
-        g_results = fetch_google_search(q, 3)
-        google_results.extend(g_results)
+    logger.info("--- Phase 5: Plain English Google ---")
+    pe_results = []
+    for q in SEARCH_QUERIES_PLAIN_ENGLISH:
+        pe_results.extend(fetch_google_search(q, 3))
         time.sleep(2)
-    total_relevant += process_results(google_results, "Google Legal")
+    total_relevant += process_results(pe_results, "Google Plain English")
 
-    logger.info("--- Phase 7: Governance and Boardroom ---")
+    logger.info("--- Phase 6: Ind AS ---")
+    indas_results = []
+    for q in SEARCH_QUERIES_INDAS:
+        indas_results.extend(fetch_google_search(q, 3))
+        time.sleep(1.5)
+    total_relevant += process_results(indas_results, "Ind AS")
+
+    logger.info("--- Phase 7: Governance ---")
     gov_results = []
-    for query in SEARCH_QUERIES_GOVERNANCE:
-        results = fetch_google_search(query, 3)
-        gov_results.extend(results)
+    for q in SEARCH_QUERIES_GOVERNANCE:
+        gov_results.extend(fetch_google_search(q, 3))
         time.sleep(2)
     total_relevant += process_results(gov_results, "Governance")
     total_relevant += process_results(fetch_newspaper_governance(), "Newspaper Governance")
@@ -851,12 +657,8 @@ def run_sweep():
     logger.info("--- Phase 8: Law Firm Blogs ---")
     total_relevant += process_results(fetch_law_firm_blogs(), "Law Firm Blogs")
 
-    logger.info("=== v5 SWEEP COMPLETE. Total relevant: %d ===", total_relevant)
+    logger.info("=== SWEEP COMPLETE. Total relevant: %d ===", total_relevant)
 
-
-# ---------------------------------------------------------------------------
-# API Endpoints
-# ---------------------------------------------------------------------------
 
 @app.route("/")
 def index():
@@ -864,37 +666,34 @@ def index():
     with open(html_path, "r") as f:
         return f.read(), 200, {"Content-Type": "text/html; charset=utf-8"}
 
-
 @app.route("/api/judgments")
 def get_judgments():
     category = request.args.get("category", "")
     score = request.args.get("score", "")
-    days = int(request.args.get("days", "90"))
+    days = int(request.args.get("days", "365"))
     search = request.args.get("search", "")
     page = int(request.args.get("page", "1"))
     per_page = 20
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    where_clauses = []
+    wc = []
     params = []
     cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
-    where_clauses.append("date_fetched >= ?")
+    wc.append("date_fetched >= ?")
     params.append(cutoff)
     if category:
-        where_clauses.append("categories LIKE ?")
+        wc.append("categories LIKE ?")
         params.append("%" + category + "%")
     if score:
-        where_clauses.append("relevance_score = ?")
+        wc.append("relevance_score = ?")
         params.append(score)
     if search:
-        where_clauses.append("(title LIKE ? OR practitioner_note LIKE ? OR sections LIKE ?)")
+        wc.append("(title LIKE ? OR practitioner_note LIKE ? OR sections LIKE ?)")
         params.extend(["%" + search + "%"] * 3)
-    where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+    where_sql = " AND ".join(wc) if wc else "1=1"
     offset = (page - 1) * per_page
-    count_sql = "SELECT COUNT(*) as cnt FROM judgments WHERE " + where_sql
-    total = conn.execute(count_sql, params).fetchone()["cnt"]
-    query_sql = "SELECT * FROM judgments WHERE " + where_sql + " ORDER BY date_fetched DESC LIMIT ? OFFSET ?"
-    rows = conn.execute(query_sql, params + [per_page, offset]).fetchall()
+    total = conn.execute("SELECT COUNT(*) as cnt FROM judgments WHERE " + where_sql, params).fetchone()["cnt"]
+    rows = conn.execute("SELECT * FROM judgments WHERE " + where_sql + " ORDER BY date_fetched DESC LIMIT ? OFFSET ?", params + [per_page, offset]).fetchall()
     conn.close()
     judgments = []
     for row in rows:
@@ -904,12 +703,9 @@ def get_judgments():
             "source": row["source"], "source_url": row["source_url"],
             "categories": json.loads(row["categories"]) if row["categories"] else [],
             "sections": json.loads(row["sections"]) if row["sections"] else [],
-            "relevance_score": row["relevance_score"],
-            "practitioner_note": row["practitioner_note"],
+            "relevance_score": row["relevance_score"], "practitioner_note": row["practitioner_note"],
         })
-    return jsonify({"judgments": judgments, "total": total, "page": page,
-                     "per_page": per_page, "total_pages": (total + per_page - 1) // per_page})
-
+    return jsonify({"judgments": judgments, "total": total, "page": page, "per_page": per_page, "total_pages": (total + per_page - 1) // per_page})
 
 @app.route("/api/stats")
 def get_stats():
@@ -926,9 +722,7 @@ def get_stats():
         for c in cats:
             cat_counts[str(c)] = cat_counts.get(str(c), 0) + 1
     conn.close()
-    return jsonify({"total_judgments": total, "high_relevance": high,
-                     "last_sweep": last_sweep_time, "category_distribution": cat_counts})
-
+    return jsonify({"total_judgments": total, "high_relevance": high, "last_sweep": last_sweep_time, "category_distribution": cat_counts})
 
 @app.route("/api/sweep", methods=["POST"])
 def trigger_sweep():
@@ -942,7 +736,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(run_sweep, "interval", hours=SWEEP_INTERVAL_HOURS, id="main_sweep",
                   next_run_time=datetime.utcnow() + timedelta(minutes=2))
 scheduler.start()
-logger.info("v5 Scheduler started. Sweeps every %d hours.", SWEEP_INTERVAL_HOURS)
+logger.info("v5-updated Scheduler started. Sweeps every %d hours.", SWEEP_INTERVAL_HOURS)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT, debug=False)
