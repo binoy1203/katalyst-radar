@@ -3,3 +3,4 @@ requests==2.32.3
 feedparser==6.0.11
 APScheduler==3.10.4
 gunicorn==23.0.0
+python-docx==1.1.2
