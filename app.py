@@ -94,19 +94,40 @@ def strip_html(text):
     return re.sub(r'\s+', ' ', text).strip()
 
 def fetch_google_search(query, num=10):
+    """Search Google via Serper.dev API. Returns clean structured results."""
     results = []
+    serper_key = os.environ.get("SERPER_API_KEY", "")
+    if not serper_key:
+        logger.error("No SERPER_API_KEY set. Google search disabled.")
+        return results
     try:
-        resp = safe_get("https://www.google.com/search?q=" + quote(query) + "&num=" + str(num))
-        if resp:
-            matches = re.findall(r'<a href="/url\?q=(https?://[^&"]+)', resp.text)
-            title_matches = re.findall(r'<h3[^>]*>(.*?)</h3>', resp.text, re.DOTALL)
-            for i, url in enumerate(matches[:num]):
-                if "google.com" in url or "googleapis.com" in url:
-                    continue
-                title = strip_html(title_matches[i]) if i < len(title_matches) else url
-                results.append({"title": title, "url": url, "snippet": "", "source": "Google"})
+        resp = requests.post(
+            "https://google.serper.dev/search",
+            headers={"X-API-KEY": serper_key, "Content-Type": "application/json"},
+            json={"q": query, "num": num, "gl": "in", "hl": "en"},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            for item in data.get("organic", []):
+                results.append({
+                    "title": item.get("title", ""),
+                    "url": item.get("link", ""),
+                    "snippet": item.get("snippet", ""),
+                    "source": "Google",
+                })
+            # Also grab news results if present
+            for item in data.get("news", []):
+                results.append({
+                    "title": item.get("title", ""),
+                    "url": item.get("link", ""),
+                    "snippet": item.get("snippet", ""),
+                    "source": "Google News",
+                })
+        else:
+            logger.error("Serper API error %d: %s", resp.status_code, resp.text[:200])
     except Exception as e:
-        logger.error("Google error: %s", str(e)[:100])
+        logger.error("Serper error: %s", str(e)[:100])
     return results
 
 def fetch_rss_feed(feed_url, source_name):
