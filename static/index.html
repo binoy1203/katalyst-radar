@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Katalyst Judgment Radar</title>
+    <style>
+        :root {
+            --ink: #1a1a1a;
+            --paper: #f7f5f0;
+            --paper-warm: #f0ece3;
+            --accent: #8b2500;
+            --accent-light: #b8533a;
+            --border: #d4cfc4;
+            --muted: #6b6560;
+            --high: #8b2500;
+            --medium: #a67c00;
+            --low: #5a7a5a;
+            --tag-bg: #e8e4db;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: var(--paper);
+            color: var(--ink);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: var(--ink);
+            color: var(--paper);
+            padding: 2rem 0;
+            border-bottom: 4px solid var(--accent);
+        }
+
+        .header-inner {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+        }
+
+        .header h1 {
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: 2rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+
+        .header h1 span {
+            color: var(--accent-light);
+        }
+
+        .header-meta {
+            font-size: 0.82rem;
+            opacity: 0.7;
+            text-align: right;
+        }
+
+        .stats-bar {
+            background: var(--paper-warm);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 0;
+        }
+
+        .stats-inner {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            display: flex;
+            gap: 2.5rem;
+            align-items: center;
+        }
+
+        .stat {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .stat-value {
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .stat-label {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+        }
+
+        .sweep-btn {
+            margin-left: auto;
+            background: var(--ink);
+            color: var(--paper);
+            border: none;
+            padding: 0.5rem 1.2rem;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            font-size: 0.82rem;
+            cursor: pointer;
+            letter-spacing: 0.03em;
+            transition: background 0.2s;
+        }
+
+        .sweep-btn:hover { background: var(--accent); }
+        .sweep-btn:disabled { opacity: 0.5; cursor: wait; }
+
+        .filters {
+            max-width: 1100px;
+            margin: 1.5rem auto 0;
+            padding: 0 2rem;
+        }
+
+        .filter-row {
+            display: flex;
+            gap: 0.8rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .filter-label {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            white-space: nowrap;
+        }
+
+        select, .search-input {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            font-size: 0.85rem;
+            padding: 0.4rem 0.7rem;
+            border: 1px solid var(--border);
+            background: white;
+            color: var(--ink);
+            outline: none;
+        }
+
+        select:focus, .search-input:focus {
+            border-color: var(--accent);
+        }
+
+        .search-input {
+            width: 220px;
+        }
+
+        .category-pills {
+            max-width: 1100px;
+            margin: 1rem auto 0;
+            padding: 0 2rem;
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .cat-pill {
+            font-size: 0.75rem;
+            padding: 0.3rem 0.7rem;
+            border: 1px solid var(--border);
+            background: white;
+            cursor: pointer;
+            transition: all 0.15s;
+            letter-spacing: 0.02em;
+        }
+
+        .cat-pill:hover { border-color: var(--accent); color: var(--accent); }
+        .cat-pill.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+        .judgments {
+            max-width: 1100px;
+            margin: 1.5rem auto 3rem;
+            padding: 0 2rem;
+        }
+
+        .judgment-card {
+            background: white;
+            border: 1px solid var(--border);
+            padding: 1.5rem 1.8rem;
+            margin-bottom: 1rem;
+            position: relative;
+            transition: border-color 0.2s;
+        }
+
+        .judgment-card:hover { border-color: var(--accent); }
+
+        .judgment-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 0.6rem;
+        }
+
+        .judgment-title {
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: 1.2rem;
+            font-weight: 600;
+            line-height: 1.35;
+            flex: 1;
+            margin-right: 1rem;
+        }
+
+        .judgment-title a {
+            color: var(--ink);
+            text-decoration: none;
+        }
+
+        .judgment-title a:hover { color: var(--accent); }
+
+        .relevance-badge {
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            padding: 0.25rem 0.6rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .relevance-high { background: #f5e6e2; color: var(--high); }
+        .relevance-medium { background: #f5f0e0; color: var(--medium); }
+        .relevance-low { background: #e6efe6; color: var(--low); }
+
+        .judgment-meta {
+            font-size: 0.8rem;
+            color: var(--muted);
+            margin-bottom: 0.8rem;
+            display: flex;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .meta-item { white-space: nowrap; }
+
+        .judgment-tags {
+            display: flex;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+            margin-bottom: 0.8rem;
+        }
+
+        .tag {
+            font-size: 0.7rem;
+            padding: 0.2rem 0.5rem;
+            background: var(--tag-bg);
+            color: var(--muted);
+            letter-spacing: 0.02em;
+        }
+
+        .tag-section {
+            background: #e2e8f0;
+            color: #475569;
+        }
+
+        .practitioner-note {
+            font-size: 0.9rem;
+            line-height: 1.65;
+            color: #333;
+            padding-top: 0.6rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+            margin-top: 2rem;
+        }
+
+        .page-btn {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            font-size: 0.85rem;
+            padding: 0.4rem 0.9rem;
+            border: 1px solid var(--border);
+            background: white;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .page-btn:hover { border-color: var(--accent); }
+        .page-btn.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+        .page-btn:disabled { opacity: 0.3; cursor: default; }
+
+        .loading, .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: var(--muted);
+        }
+
+        .loading-spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .empty-state h3 {
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: 1.4rem;
+            margin-bottom: 0.5rem;
+            color: var(--ink);
+        }
+
+        @media (max-width: 700px) {
+            .header-inner { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+            .header-meta { text-align: left; }
+            .stats-inner { flex-wrap: wrap; gap: 1.2rem; }
+            .filter-row { flex-direction: column; align-items: flex-start; }
+            .search-input { width: 100%; }
+            .judgment-header { flex-direction: column; gap: 0.5rem; }
+            .judgment-meta { flex-direction: column; gap: 0.3rem; }
+        }
+    </style>
+</head>
+<body>
+
+<header class="header">
+    <div class="header-inner">
+        <h1>Katalyst <span>Judgment Radar</span></h1>
+        <div class="header-meta">
+            <div>M&A Succession & Family Arrangement Intelligence</div>
+            <div id="lastSweep">Loading...</div>
+        </div>
+    </div>
+</header>
+
+<div class="stats-bar">
+    <div class="stats-inner">
+        <div class="stat">
+            <span class="stat-value" id="totalCount">--</span>
+            <span class="stat-label">Total Judgments</span>
+        </div>
+        <div class="stat">
+            <span class="stat-value" id="highCount">--</span>
+            <span class="stat-label">High Relevance</span>
+        </div>
+        <div class="stat">
+            <span class="stat-value" id="todayCount">--</span>
+            <span class="stat-label">New Today</span>
+        </div>
+        <button class="sweep-btn" id="sweepBtn" onclick="triggerSweep()">Run Sweep Now</button>
+    </div>
+</div>
+
+<div class="filters">
+    <div class="filter-row">
+        <div class="filter-group">
+            <span class="filter-label">Relevance</span>
+            <select id="filterScore" onchange="loadJudgments()">
+                <option value="">All</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <span class="filter-label">Period</span>
+            <select id="filterDays" onchange="loadJudgments()">
+                <option value="7">Last 7 Days</option>
+                <option value="30" selected>Last 30 Days</option>
+                <option value="90">Last 90 Days</option>
+                <option value="365">Last Year</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <span class="filter-label">Search</span>
+            <input type="text" class="search-input" id="filterSearch"
+                   placeholder="Section, keyword, party name..."
+                   onkeyup="debounceSearch()">
+        </div>
+    </div>
+</div>
+
+<div class="category-pills" id="categoryPills">
+    <div class="cat-pill active" data-cat="" onclick="filterCategory(this, '')">All</div>
+    <div class="cat-pill" data-cat="1" onclick="filterCategory(this, '1')">Schemes of Arrangement</div>
+    <div class="cat-pill" data-cat="2" onclick="filterCategory(this, '2')">Family Arrangement</div>
+    <div class="cat-pill" data-cat="3" onclick="filterCategory(this, '3')">Income Tax</div>
+    <div class="cat-pill" data-cat="4" onclick="filterCategory(this, '4')">SEBI / Securities</div>
+    <div class="cat-pill" data-cat="5" onclick="filterCategory(this, '5')">Stamp Duty</div>
+    <div class="cat-pill" data-cat="6" onclick="filterCategory(this, '6')">FEMA</div>
+    <div class="cat-pill" data-cat="7" onclick="filterCategory(this, '7')">Trust Law</div>
+    <div class="cat-pill" data-cat="8" onclick="filterCategory(this, '8')">Insolvency</div>
+</div>
+
+<div class="judgments" id="judgmentList">
+    <div class="loading">
+        <div class="loading-spinner"></div>
+        <p>Loading judgments...</p>
+    </div>
+</div>
+
+<script>
+    const API_BASE = window.location.origin;
+    let currentPage = 1;
+    let currentCategory = "";
+    let searchTimeout = null;
+
+    const CATEGORY_NAMES = {
+        1: "Schemes of Arrangement",
+        2: "Family Arrangement",
+        3: "Income Tax",
+        4: "SEBI / Securities",
+        5: "Stamp Duty",
+        6: "FEMA / Cross-Border",
+        7: "Trust Law",
+        8: "Insolvency Intersection"
+    };
+
+    async function loadStats() {
+        try {
+            const resp = await fetch(API_BASE + "/api/stats");
+            const data = await resp.json();
+            document.getElementById("totalCount").textContent = data.total_judgments || 0;
+            document.getElementById("highCount").textContent = data.high_relevance || 0;
+            if (data.last_sweep) {
+                var d = new Date(data.last_sweep + "Z");
+                var now = new Date();
+                var diffHours = Math.round((now - d) / (1000 * 60 * 60));
+                document.getElementById("lastSweep").textContent = "Last sweep: " + diffHours + "h ago";
+            } else {
+                document.getElementById("lastSweep").textContent = "No sweeps yet";
+            }
+        } catch (e) {
+            console.error("Failed to load stats:", e);
+        }
+    }
+
+    async function loadJudgments(page) {
+        if (!page) page = 1;
+        currentPage = page;
+        var score = document.getElementById("filterScore").value;
+        var days = document.getElementById("filterDays").value;
+        var search = document.getElementById("filterSearch").value;
+
+        var params = "page=" + page + "&days=" + days;
+        if (currentCategory) params += "&category=" + currentCategory;
+        if (score) params += "&score=" + score;
+        if (search) params += "&search=" + encodeURIComponent(search);
+
+        var container = document.getElementById("judgmentList");
+        container.innerHTML = '<div class="loading"><div class="loading-spinner"></div><p>Loading...</p></div>';
+
+        try {
+            var resp = await fetch(API_BASE + "/api/judgments?" + params);
+            var data = await resp.json();
+
+            if (data.judgments.length === 0) {
+                container.innerHTML = '<div class="empty-state"><h3>No judgments found</h3><p>Try adjusting your filters or run a new sweep.</p></div>';
+                return;
+            }
+
+            var html = "";
+            for (var i = 0; i < data.judgments.length; i++) {
+                html += renderJudgmentCard(data.judgments[i]);
+            }
+
+            if (data.total_pages > 1) {
+                html += '<div class="pagination">';
+                html += '<button class="page-btn" onclick="loadJudgments(' + (page - 1) + ')" ' + (page <= 1 ? 'disabled' : '') + '>&laquo; Prev</button>';
+                var maxPage = Math.min(data.total_pages, 10);
+                for (var p = 1; p <= maxPage; p++) {
+                    html += '<button class="page-btn ' + (p === page ? 'active' : '') + '" onclick="loadJudgments(' + p + ')">' + p + '</button>';
+                }
+                html += '<button class="page-btn" onclick="loadJudgments(' + (page + 1) + ')" ' + (page >= data.total_pages ? 'disabled' : '') + '>Next &raquo;</button>';
+                html += '</div>';
+            }
+
+            container.innerHTML = html;
+
+            var todayCount = 0;
+            var today = new Date().toDateString();
+            for (var j = 0; j < data.judgments.length; j++) {
+                if (new Date(data.judgments[j].date_fetched + "Z").toDateString() === today) todayCount++;
+            }
+            document.getElementById("todayCount").textContent = todayCount;
+
+        } catch (e) {
+            console.error("Failed to load judgments:", e);
+            container.innerHTML = '<div class="empty-state"><h3>Connection Error</h3><p>Could not reach the server. Please check that the application is running.</p></div>';
+        }
+    }
+
+    function renderJudgmentCard(j) {
+        var relevanceClass = "relevance-" + (j.relevance_score || "low");
+        var dateStr = "";
+        if (j.date_fetched) {
+            var d = new Date(j.date_fetched + "Z");
+            dateStr = d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+        }
+
+        var categoryTags = "";
+        if (j.categories) {
+            for (var i = 0; i < j.categories.length; i++) {
+                categoryTags += '<span class="tag">' + (CATEGORY_NAMES[j.categories[i]] || ("Category " + j.categories[i])) + '</span>';
+            }
+        }
+
+        var sectionTags = "";
+        if (j.sections) {
+            for (var i = 0; i < j.sections.length; i++) {
+                sectionTags += '<span class="tag tag-section">' + escapeHtml(j.sections[i]) + '</span>';
+            }
+        }
+
+        var html = '<div class="judgment-card">';
+        html += '<div class="judgment-header">';
+        html += '<div class="judgment-title"><a href="' + (j.source_url || '#') + '" target="_blank" rel="noopener">' + escapeHtml(j.title) + '</a></div>';
+        html += '<span class="relevance-badge ' + relevanceClass + '">' + (j.relevance_score || '').toUpperCase() + '</span>';
+        html += '</div>';
+        html += '<div class="judgment-meta">';
+        if (j.court) html += '<span class="meta-item">' + escapeHtml(j.court) + '</span>';
+        if (j.source) html += '<span class="meta-item">' + escapeHtml(j.source) + '</span>';
+        if (dateStr) html += '<span class="meta-item">' + dateStr + '</span>';
+        html += '</div>';
+        html += '<div class="judgment-tags">' + categoryTags + sectionTags + '</div>';
+        if (j.practitioner_note) {
+            html += '<div class="practitioner-note">' + escapeHtml(j.practitioner_note) + '</div>';
+        }
+        html += '</div>';
+        return html;
+    }
+
+    function filterCategory(el, cat) {
+        var pills = document.querySelectorAll('.cat-pill');
+        for (var i = 0; i < pills.length; i++) pills[i].classList.remove('active');
+        el.classList.add('active');
+        currentCategory = cat;
+        loadJudgments(1);
+    }
+
+    function debounceSearch() {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(function() { loadJudgments(1); }, 400);
+    }
+
+    async function triggerSweep() {
+        var btn = document.getElementById("sweepBtn");
+        btn.disabled = true;
+        btn.textContent = "Sweeping...";
+        try {
+            await fetch(API_BASE + "/api/sweep", { method: "POST" });
+            btn.textContent = "Sweep Running";
+            setTimeout(function() {
+                btn.disabled = false;
+                btn.textContent = "Run Sweep Now";
+                loadStats();
+                loadJudgments(1);
+            }, 30000);
+        } catch (e) {
+            btn.disabled = false;
+            btn.textContent = "Sweep Failed";
+            setTimeout(function() { btn.textContent = "Run Sweep Now"; }, 3000);
+        }
+    }
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        var div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    document.addEventListener("DOMContentLoaded", function() {
+        loadStats();
+        loadJudgments(1);
+    });
+</script>
+
+</body>
+</html>
