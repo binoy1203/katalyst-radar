@@ -52,9 +52,7 @@
             letter-spacing: 0.02em;
         }
 
-        .header h1 span {
-            color: var(--accent-light);
-        }
+        .header h1 span { color: var(--accent-light); }
 
         .header-meta {
             font-size: 0.82rem;
@@ -77,10 +75,7 @@
             align-items: center;
         }
 
-        .stat {
-            display: flex;
-            flex-direction: column;
-        }
+        .stat { display: flex; flex-direction: column; }
 
         .stat-value {
             font-family: Georgia, 'Times New Roman', serif;
@@ -125,11 +120,7 @@
             align-items: center;
         }
 
-        .filter-group {
-            display: flex;
-            align-items: center;
-            gap: 0.4rem;
-        }
+        .filter-group { display: flex; align-items: center; gap: 0.4rem; }
 
         .filter-label {
             font-size: 0.72rem;
@@ -149,13 +140,8 @@
             outline: none;
         }
 
-        select:focus, .search-input:focus {
-            border-color: var(--accent);
-        }
-
-        .search-input {
-            width: 220px;
-        }
+        select:focus, .search-input:focus { border-color: var(--accent); }
+        .search-input { width: 220px; }
 
         .category-pills {
             max-width: 1100px;
@@ -212,11 +198,7 @@
             margin-right: 1rem;
         }
 
-        .judgment-title a {
-            color: var(--ink);
-            text-decoration: none;
-        }
-
+        .judgment-title a { color: var(--ink); text-decoration: none; }
         .judgment-title a:hover { color: var(--accent); }
 
         .relevance-badge {
@@ -258,10 +240,7 @@
             letter-spacing: 0.02em;
         }
 
-        .tag-section {
-            background: #e2e8f0;
-            color: #475569;
-        }
+        .tag-section { background: #e2e8f0; color: #475569; }
 
         .practitioner-note {
             font-size: 0.9rem;
@@ -334,7 +313,7 @@
     <div class="header-inner">
         <h1>Katalyst <span>Judgment Radar</span></h1>
         <div class="header-meta">
-            <div>M&A Succession & Family Arrangement Intelligence</div>
+            <div>M&A, Succession, Governance & Transaction Intelligence</div>
             <div id="lastSweep">Loading...</div>
         </div>
     </div>
@@ -389,14 +368,16 @@
 
 <div class="category-pills" id="categoryPills">
     <div class="cat-pill active" data-cat="" onclick="filterCategory(this, '')">All</div>
-    <div class="cat-pill" data-cat="1" onclick="filterCategory(this, '1')">Schemes of Arrangement</div>
+    <div class="cat-pill" data-cat="1" onclick="filterCategory(this, '1')">Schemes</div>
     <div class="cat-pill" data-cat="2" onclick="filterCategory(this, '2')">Family Arrangement</div>
     <div class="cat-pill" data-cat="3" onclick="filterCategory(this, '3')">Income Tax</div>
-    <div class="cat-pill" data-cat="4" onclick="filterCategory(this, '4')">SEBI / Securities</div>
+    <div class="cat-pill" data-cat="4" onclick="filterCategory(this, '4')">SEBI</div>
     <div class="cat-pill" data-cat="5" onclick="filterCategory(this, '5')">Stamp Duty</div>
     <div class="cat-pill" data-cat="6" onclick="filterCategory(this, '6')">FEMA</div>
     <div class="cat-pill" data-cat="7" onclick="filterCategory(this, '7')">Trust Law</div>
     <div class="cat-pill" data-cat="8" onclick="filterCategory(this, '8')">Insolvency</div>
+    <div class="cat-pill" data-cat="9" onclick="filterCategory(this, '9')">Boardroom</div>
+    <div class="cat-pill" data-cat="10" onclick="filterCategory(this, '10')">Ind AS</div>
 </div>
 
 <div class="judgments" id="judgmentList">
@@ -407,12 +388,12 @@
 </div>
 
 <script>
-    const API_BASE = window.location.origin;
-    let currentPage = 1;
-    let currentCategory = "";
-    let searchTimeout = null;
+    var API_BASE = window.location.origin;
+    var currentPage = 1;
+    var currentCategory = "";
+    var searchTimeout = null;
 
-    const CATEGORY_NAMES = {
+    var CATEGORY_NAMES = {
         1: "Schemes of Arrangement",
         2: "Family Arrangement",
         3: "Income Tax",
@@ -420,118 +401,108 @@
         5: "Stamp Duty",
         6: "FEMA / Cross-Border",
         7: "Trust Law",
-        8: "Insolvency Intersection"
+        8: "Insolvency",
+        9: "Boardroom / Governance",
+        10: "Ind AS / Accounting"
     };
 
-    async function loadStats() {
-        try {
-            const resp = await fetch(API_BASE + "/api/stats");
-            const data = await resp.json();
-            document.getElementById("totalCount").textContent = data.total_judgments || 0;
-            document.getElementById("highCount").textContent = data.high_relevance || 0;
-            if (data.last_sweep) {
-                var d = new Date(data.last_sweep + "Z");
-                var now = new Date();
-                var diffHours = Math.round((now - d) / (1000 * 60 * 60));
-                document.getElementById("lastSweep").textContent = "Last sweep: " + diffHours + "h ago";
-            } else {
-                document.getElementById("lastSweep").textContent = "No sweeps yet";
-            }
-        } catch (e) {
-            console.error("Failed to load stats:", e);
-        }
+    function loadStats() {
+        fetch(API_BASE + "/api/stats")
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                document.getElementById("totalCount").textContent = data.total_judgments || 0;
+                document.getElementById("highCount").textContent = data.high_relevance || 0;
+                if (data.last_sweep) {
+                    var d = new Date(data.last_sweep + "Z");
+                    var now = new Date();
+                    var diffHours = Math.round((now - d) / (1000 * 60 * 60));
+                    document.getElementById("lastSweep").textContent = "Last sweep: " + diffHours + "h ago";
+                } else {
+                    document.getElementById("lastSweep").textContent = "No sweeps yet";
+                }
+            })
+            .catch(function(e) { console.error("Stats error:", e); });
     }
 
-    async function loadJudgments(page) {
+    function loadJudgments(page) {
         if (!page) page = 1;
         currentPage = page;
         var score = document.getElementById("filterScore").value;
         var days = document.getElementById("filterDays").value;
         var search = document.getElementById("filterSearch").value;
-
         var params = "page=" + page + "&days=" + days;
         if (currentCategory) params += "&category=" + currentCategory;
         if (score) params += "&score=" + score;
         if (search) params += "&search=" + encodeURIComponent(search);
-
         var container = document.getElementById("judgmentList");
         container.innerHTML = '<div class="loading"><div class="loading-spinner"></div><p>Loading...</p></div>';
-
-        try {
-            var resp = await fetch(API_BASE + "/api/judgments?" + params);
-            var data = await resp.json();
-
-            if (data.judgments.length === 0) {
-                container.innerHTML = '<div class="empty-state"><h3>No judgments found</h3><p>Try adjusting your filters or run a new sweep.</p></div>';
-                return;
-            }
-
-            var html = "";
-            for (var i = 0; i < data.judgments.length; i++) {
-                html += renderJudgmentCard(data.judgments[i]);
-            }
-
-            if (data.total_pages > 1) {
-                html += '<div class="pagination">';
-                html += '<button class="page-btn" onclick="loadJudgments(' + (page - 1) + ')" ' + (page <= 1 ? 'disabled' : '') + '>&laquo; Prev</button>';
-                var maxPage = Math.min(data.total_pages, 10);
-                for (var p = 1; p <= maxPage; p++) {
-                    html += '<button class="page-btn ' + (p === page ? 'active' : '') + '" onclick="loadJudgments(' + p + ')">' + p + '</button>';
+        fetch(API_BASE + "/api/judgments?" + params)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.judgments.length === 0) {
+                    container.innerHTML = '<div class="empty-state"><h3>No judgments found</h3><p>Try adjusting your filters or run a new sweep.</p></div>';
+                    return;
                 }
-                html += '<button class="page-btn" onclick="loadJudgments(' + (page + 1) + ')" ' + (page >= data.total_pages ? 'disabled' : '') + '>Next &raquo;</button>';
-                html += '</div>';
-            }
-
-            container.innerHTML = html;
-
-            var todayCount = 0;
-            var today = new Date().toDateString();
-            for (var j = 0; j < data.judgments.length; j++) {
-                if (new Date(data.judgments[j].date_fetched + "Z").toDateString() === today) todayCount++;
-            }
-            document.getElementById("todayCount").textContent = todayCount;
-
-        } catch (e) {
-            console.error("Failed to load judgments:", e);
-            container.innerHTML = '<div class="empty-state"><h3>Connection Error</h3><p>Could not reach the server. Please check that the application is running.</p></div>';
-        }
+                var html = "";
+                for (var i = 0; i < data.judgments.length; i++) {
+                    html += renderCard(data.judgments[i]);
+                }
+                if (data.total_pages > 1) {
+                    html += '<div class="pagination">';
+                    html += '<button class="page-btn" onclick="loadJudgments(' + (page - 1) + ')" ' + (page <= 1 ? 'disabled' : '') + '>&laquo; Prev</button>';
+                    var maxPage = Math.min(data.total_pages, 10);
+                    for (var p = 1; p <= maxPage; p++) {
+                        html += '<button class="page-btn ' + (p === page ? 'active' : '') + '" onclick="loadJudgments(' + p + ')">' + p + '</button>';
+                    }
+                    html += '<button class="page-btn" onclick="loadJudgments(' + (page + 1) + ')" ' + (page >= data.total_pages ? 'disabled' : '') + '>Next &raquo;</button>';
+                    html += '</div>';
+                }
+                container.innerHTML = html;
+                var todayCount = 0;
+                var today = new Date().toDateString();
+                for (var j = 0; j < data.judgments.length; j++) {
+                    if (new Date(data.judgments[j].date_fetched + "Z").toDateString() === today) todayCount++;
+                }
+                document.getElementById("todayCount").textContent = todayCount;
+            })
+            .catch(function(e) {
+                console.error("Load error:", e);
+                container.innerHTML = '<div class="empty-state"><h3>Connection Error</h3><p>Could not reach the server.</p></div>';
+            });
     }
 
-    function renderJudgmentCard(j) {
+    function renderCard(j) {
         var relevanceClass = "relevance-" + (j.relevance_score || "low");
         var dateStr = "";
         if (j.date_fetched) {
             var d = new Date(j.date_fetched + "Z");
             dateStr = d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
         }
-
         var categoryTags = "";
         if (j.categories) {
             for (var i = 0; i < j.categories.length; i++) {
-                categoryTags += '<span class="tag">' + (CATEGORY_NAMES[j.categories[i]] || ("Category " + j.categories[i])) + '</span>';
+                categoryTags += '<span class="tag">' + (CATEGORY_NAMES[j.categories[i]] || ("Cat " + j.categories[i])) + '</span>';
             }
         }
-
         var sectionTags = "";
         if (j.sections) {
             for (var i = 0; i < j.sections.length; i++) {
-                sectionTags += '<span class="tag tag-section">' + escapeHtml(j.sections[i]) + '</span>';
+                sectionTags += '<span class="tag tag-section">' + esc(j.sections[i]) + '</span>';
             }
         }
-
         var html = '<div class="judgment-card">';
         html += '<div class="judgment-header">';
-        html += '<div class="judgment-title"><a href="' + (j.source_url || '#') + '" target="_blank" rel="noopener">' + escapeHtml(j.title) + '</a></div>';
+        html += '<div class="judgment-title"><a href="' + (j.source_url || '#') + '" target="_blank" rel="noopener">' + esc(j.title) + '</a></div>';
         html += '<span class="relevance-badge ' + relevanceClass + '">' + (j.relevance_score || '').toUpperCase() + '</span>';
         html += '</div>';
         html += '<div class="judgment-meta">';
-        if (j.court) html += '<span class="meta-item">' + escapeHtml(j.court) + '</span>';
-        if (j.source) html += '<span class="meta-item">' + escapeHtml(j.source) + '</span>';
+        if (j.court) html += '<span class="meta-item">' + esc(j.court) + '</span>';
+        if (j.source) html += '<span class="meta-item">' + esc(j.source) + '</span>';
         if (dateStr) html += '<span class="meta-item">' + dateStr + '</span>';
         html += '</div>';
         html += '<div class="judgment-tags">' + categoryTags + sectionTags + '</div>';
         if (j.practitioner_note) {
-            html += '<div class="practitioner-note">' + escapeHtml(j.practitioner_note) + '</div>';
+            html += '<div class="practitioner-note">' + esc(j.practitioner_note) + '</div>';
         }
         html += '</div>';
         return html;
@@ -550,27 +521,28 @@
         searchTimeout = setTimeout(function() { loadJudgments(1); }, 400);
     }
 
-    async function triggerSweep() {
+    function triggerSweep() {
         var btn = document.getElementById("sweepBtn");
         btn.disabled = true;
         btn.textContent = "Sweeping...";
-        try {
-            await fetch(API_BASE + "/api/sweep", { method: "POST" });
-            btn.textContent = "Sweep Running";
-            setTimeout(function() {
+        fetch(API_BASE + "/api/sweep", { method: "POST" })
+            .then(function() {
+                btn.textContent = "Sweep Running";
+                setTimeout(function() {
+                    btn.disabled = false;
+                    btn.textContent = "Run Sweep Now";
+                    loadStats();
+                    loadJudgments(1);
+                }, 60000);
+            })
+            .catch(function() {
                 btn.disabled = false;
-                btn.textContent = "Run Sweep Now";
-                loadStats();
-                loadJudgments(1);
-            }, 30000);
-        } catch (e) {
-            btn.disabled = false;
-            btn.textContent = "Sweep Failed";
-            setTimeout(function() { btn.textContent = "Run Sweep Now"; }, 3000);
-        }
+                btn.textContent = "Sweep Failed";
+                setTimeout(function() { btn.textContent = "Run Sweep Now"; }, 3000);
+            });
     }
 
-    function escapeHtml(str) {
+    function esc(str) {
         if (!str) return '';
         var div = document.createElement('div');
         div.textContent = str;
