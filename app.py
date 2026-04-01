@@ -21,7 +21,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "radar.db")
+DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "radar.db"))
 SWEEP_INTERVAL_HOURS = int(os.environ.get("SWEEP_INTERVAL_HOURS", "12"))
 PORT = int(os.environ.get("PORT", "8080"))
 
@@ -34,6 +34,12 @@ sweep_lock = threading.Lock()
 
 
 def init_db():
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir and not os.path.exists(db_dir):
+        try:
+            os.makedirs(db_dir, exist_ok=True)
+        except OSError as e:
+            logger.error("Could not create DB directory %s: %s", db_dir, e)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("""CREATE TABLE IF NOT EXISTS judgments (
         id TEXT PRIMARY KEY, title TEXT NOT NULL, court TEXT, date_decided TEXT,
@@ -250,23 +256,36 @@ def google_multi(queries, source_name, results_per=3, delay=2):
 # ---------------------------------------------------------------------------
 
 RSS_FEEDS = [
+    # Legal publications
     ("https://www.livelaw.in/feed", "LiveLaw"),
     ("https://www.barandbench.com/feed", "Bar and Bench"),
-    ("https://www.taxmann.com/post/blog/feed/", "Taxmann"),
-    ("https://taxguru.in/feed", "TaxGuru"),
     ("https://www.scconline.com/blog/post/feed/", "SCC Online Blog"),
     ("https://www.mondaq.com/india/feeds/rss/latest", "Mondaq India"),
-    ("https://corporate.cyrilamarchandblogs.com/feed/", "CAM Blog"),
     ("https://indiacorplaw.in/feed", "IndiaCorpLaw"),
+    ("https://www.livelaw.in/tax-cases/feed", "LiveLaw Tax"),
+    ("https://www.livelaw.in/corporate-law/feed", "LiveLaw Corporate"),
+    ("https://www.livelaw.in/supreme-court/feed", "LiveLaw SC"),
+    ("https://www.livelaw.in/high-court/feed", "LiveLaw HC"),
+    ("https://www.livelaw.in/nclt-nclat/feed", "LiveLaw NCLT"),
+    # Tax and compliance
+    ("https://www.taxmann.com/post/blog/feed/", "Taxmann"),
+    ("https://taxguru.in/feed", "TaxGuru"),
     ("https://taxguru.in/income-tax/feed", "TaxGuru Income Tax"),
     ("https://taxguru.in/company-law/feed", "TaxGuru Company Law"),
     ("https://taxguru.in/sebi/feed", "TaxGuru SEBI"),
-    ("https://www.livelaw.in/tax-cases/feed", "LiveLaw Tax"),
-    ("https://www.livelaw.in/corporate-law/feed", "LiveLaw Corporate"),
+    ("https://taxguru.in/fema/feed", "TaxGuru FEMA"),
+    ("https://taxguru.in/corporate-law/feed", "TaxGuru Corporate"),
+    ("https://www.thetaxtalk.com/feed", "The Tax Talk"),
+    ("https://tax.cyrilamarchandblogs.com/feed/", "CAM Tax Blog"),
+    ("https://incometaxindia.gov.in/_layouts/15/Dit/Pages/Rss.aspx?List=Latest+Tax+Updates", "CBDT Updates"),
+    # Law firm blogs
+    ("https://corporate.cyrilamarchandblogs.com/feed/", "CAM Blog"),
     ("https://www.nishithdesai.com/feed", "Nishith Desai"),
     ("https://erfrequently.com/feed/", "ER Frequently (S&R)"),
+    # Business newspapers
     ("https://www.livemint.com/rss/companies", "Livemint Companies"),
     ("https://www.livemint.com/rss/money", "Livemint Money"),
+    ("https://www.livemint.com/rss/legal", "Livemint Legal"),
     ("https://economictimes.indiatimes.com/rssfeedstopstories.cms", "Economic Times"),
     ("https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms", "ET Markets"),
     ("https://www.business-standard.com/rss/companies-122.rss", "BS Companies"),
@@ -275,7 +294,11 @@ RSS_FEEDS = [
     ("https://www.financialexpress.com/feed/", "Financial Express"),
     ("https://www.thehindubusinessline.com/companies/feeder/default.rss", "Hindu BusinessLine"),
     ("https://www.fortuneindia.com/rss/enterprise", "Fortune India"),
+    # Professional bodies
     ("https://www.icai.org/rss/rss_feed.html", "ICAI"),
+    # Deal trackers and M&A news
+    ("https://www.vccircle.com/feed", "VCCircle"),
+    ("https://entrackr.com/feed", "Entrackr"),
 ]
 
 
@@ -517,16 +540,66 @@ def fetch_newspaper_governance():
 def fetch_law_firm_blogs():
     results = []
     for firm in ["site:azbpartners.com", "site:khaitanco.com", "site:trilegal.com",
-                  "site:nishithdesai.com", "site:cyrilamarchandblogs.com"]:
+                  "site:nishithdesai.com", "site:cyrilamarchandblogs.com",
+                  "site:luthra.com", "site:jsalaw.com", "site:saarthepartners.com",
+                  "site:argus-p.com", "site:desaianddiwanji.com",
+                  "site:samvadpartners.com", "site:majmudarandpartners.com"]:
         for topic in ["scheme arrangement", "family settlement", "SEBI takeover",
                        "M&A India", "corporate restructuring", "tax restructuring",
-                       "demerger", "merger", "open offer"]:
+                       "demerger", "merger", "open offer", "family governance"]:
             for r in fetch_google_search(firm + " " + topic, 2):
                 r["source"] = "Law Firm Blog"
                 results.append(r)
             time.sleep(1.5)
     logger.info("Law firms: %d", len(results))
     return results
+
+
+def fetch_taxsutra_lsi():
+    """Fetch TaxSutra, LSI, and other paywalled sources via Google snippets."""
+    return google_multi([
+        # TaxSutra products
+        "site:taxsutra.com scheme arrangement",
+        "site:taxsutra.com demerger",
+        "site:taxsutra.com slump sale",
+        "site:taxsutra.com amalgamation",
+        "site:taxsutra.com family settlement",
+        "site:taxsutra.com capital gains restructuring",
+        "site:taxsutra.com GAAR",
+        "site:taxsutra.com trust taxation",
+        "site:taxsutra.com SEBI",
+        "site:taxsutra.com cross border M&A",
+        "site:taxsutra.com transfer pricing restructuring",
+        # LSI (Legal Services India)
+        "site:legalserviceindia.com scheme arrangement",
+        "site:legalserviceindia.com family settlement",
+        "site:legalserviceindia.com corporate restructuring",
+        "site:legalserviceindia.com oppression mismanagement",
+        # itatonline.org
+        "site:itatonline.org demerger",
+        "site:itatonline.org slump sale",
+        "site:itatonline.org capital gains exemption",
+        "site:itatonline.org amalgamation",
+        "site:itatonline.org family partition",
+        "site:itatonline.org trust",
+        # Vinod Kothari
+        "site:vinodkothari.com NCLT scheme",
+        "site:vinodkothari.com IBC",
+        "site:vinodkothari.com corporate restructuring",
+        "site:vinodkothari.com valuation",
+        # IICA, RBI, CBDT
+        "site:iica.nic.in corporate governance",
+        "site:rbi.org.in circular FEMA",
+        "site:rbi.org.in master direction",
+        # Other prominent sources
+        "site:scconline.com NCLT scheme arrangement",
+        "site:scconline.com family settlement",
+        "site:bloombergquint.com merger demerger India",
+        "site:ndtvprofit.com merger acquisition India",
+        "site:thecore.in corporate governance",
+        "site:outlookbusiness.com M&A India",
+        "site:forbesindia.com family business India",
+    ], "TaxSutra/LSI/Specialist", results_per=3, delay=1.5)
 
 
 def fetch_proxy_advisory():
@@ -817,7 +890,7 @@ def _do_sweep():
     logger.info("=== v5-FINAL SWEEP at %s ===", datetime.utcnow().isoformat())
     total = 0
 
-    logger.info("--- Phase 1: RSS Feeds (26 feeds) ---")
+    logger.info("--- Phase 1: RSS Feeds (%d feeds) ---", len(RSS_FEEDS))
     rss = []
     for feed_url, name in RSS_FEEDS:
         logger.info("  %s...", name)
@@ -868,6 +941,9 @@ def _do_sweep():
     logger.info("--- Phase 8: Law Firm Blogs ---")
     total += process_results(fetch_law_firm_blogs(), "Law Firm Blogs")
 
+    logger.info("--- Phase 9: TaxSutra / LSI / Specialist Sources ---")
+    total += process_results(fetch_taxsutra_lsi(), "TaxSutra/LSI/Specialist")
+
     logger.info("=== SWEEP COMPLETE. Total relevant: %d ===", total)
 
 
@@ -887,13 +963,24 @@ def get_judgments():
     score = request.args.get("score", "")
     days = int(request.args.get("days", "365"))
     search = request.args.get("search", "")
+    date_from = request.args.get("date_from", "")
+    date_to = request.args.get("date_to", "")
     page = int(request.args.get("page", "1"))
-    per_page = 20
+    per_page = 50
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     wc, params = [], []
-    wc.append("date_fetched >= ?")
-    params.append((datetime.utcnow() - timedelta(days=days)).isoformat())
+    if date_from and date_to:
+        wc.append("date_fetched >= ?")
+        params.append(date_from + "T00:00:00")
+        wc.append("date_fetched <= ?")
+        params.append(date_to + "T23:59:59")
+    elif date_from:
+        wc.append("date_fetched >= ?")
+        params.append(date_from + "T00:00:00")
+    else:
+        wc.append("date_fetched >= ?")
+        params.append((datetime.utcnow() - timedelta(days=days)).isoformat())
     if category:
         wc.append("(categories LIKE ? OR categories LIKE ? OR categories LIKE ? OR categories LIKE ? OR categories LIKE ? OR categories LIKE ?)")
         params.extend([
@@ -950,12 +1037,23 @@ def export_doc():
     score = request.args.get("score", "")
     days = int(request.args.get("days", "365"))
     search = request.args.get("search", "")
+    date_from = request.args.get("date_from", "")
+    date_to = request.args.get("date_to", "")
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     wc, params = [], []
-    wc.append("date_fetched >= ?")
-    params.append((datetime.utcnow() - timedelta(days=days)).isoformat())
+    if date_from and date_to:
+        wc.append("date_fetched >= ?")
+        params.append(date_from + "T00:00:00")
+        wc.append("date_fetched <= ?")
+        params.append(date_to + "T23:59:59")
+    elif date_from:
+        wc.append("date_fetched >= ?")
+        params.append(date_from + "T00:00:00")
+    else:
+        wc.append("date_fetched >= ?")
+        params.append((datetime.utcnow() - timedelta(days=days)).isoformat())
     if category:
         wc.append("(categories LIKE ? OR categories LIKE ? OR categories LIKE ? OR categories LIKE ? OR categories LIKE ? OR categories LIKE ?)")
         params.extend(["[" + category + "]", "[" + category + ",", "," + category + ",", "," + category + "]", ", " + category + ",", ", " + category + "]"])
