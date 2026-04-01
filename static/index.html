@@ -351,12 +351,21 @@
         </div>
         <div class="filter-group">
             <span class="filter-label">Period</span>
-            <select id="filterDays" onchange="loadJudgments()">
+            <select id="filterDays" onchange="onPeriodChange()">
                 <option value="7">Last 7 Days</option>
                 <option value="30">Last 30 Days</option>
                 <option value="90">Last 90 Days</option>
                 <option value="365" selected>Last Year</option>
+                <option value="custom">Custom Date</option>
             </select>
+        </div>
+        <div class="filter-group" id="dateFromGroup" style="display:none">
+            <span class="filter-label">From</span>
+            <input type="date" id="filterDateFrom" onchange="loadJudgments()" style="padding:6px 10px;border:1px solid #d4cfc8;border-radius:6px;font-size:13px;background:#fff">
+        </div>
+        <div class="filter-group" id="dateToGroup" style="display:none">
+            <span class="filter-label">To</span>
+            <input type="date" id="filterDateTo" onchange="loadJudgments()" style="padding:6px 10px;border:1px solid #d4cfc8;border-radius:6px;font-size:13px;background:#fff">
         </div>
         <div class="filter-group">
             <span class="filter-label">Search</span>
@@ -425,13 +434,35 @@
             .catch(function(e) { console.error("Stats error:", e); });
     }
 
+    function onPeriodChange() {
+        var val = document.getElementById("filterDays").value;
+        if (val === "custom") {
+            document.getElementById("dateFromGroup").style.display = "";
+            document.getElementById("dateToGroup").style.display = "";
+        } else {
+            document.getElementById("dateFromGroup").style.display = "none";
+            document.getElementById("dateToGroup").style.display = "none";
+            document.getElementById("filterDateFrom").value = "";
+            document.getElementById("filterDateTo").value = "";
+            loadJudgments();
+        }
+    }
+
     function loadJudgments(page) {
         if (!page) page = 1;
         currentPage = page;
         var score = document.getElementById("filterScore").value;
         var days = document.getElementById("filterDays").value;
         var search = document.getElementById("filterSearch").value;
-        var params = "page=" + page + "&days=" + days;
+        var dateFrom = document.getElementById("filterDateFrom").value;
+        var dateTo = document.getElementById("filterDateTo").value;
+        var params = "page=" + page;
+        if (days === "custom") {
+            if (dateFrom) params += "&date_from=" + dateFrom;
+            if (dateTo) params += "&date_to=" + dateTo;
+        } else {
+            params += "&days=" + days;
+        }
         if (currentCategory) params += "&category=" + currentCategory;
         if (score) params += "&score=" + score;
         if (search) params += "&search=" + encodeURIComponent(search);
@@ -450,12 +481,16 @@
                 }
                 if (data.total_pages > 1) {
                     html += '<div class="pagination">';
+                    html += '<button class="page-btn" onclick="loadJudgments(1)" ' + (page <= 1 ? 'disabled' : '') + '>First</button>';
                     html += '<button class="page-btn" onclick="loadJudgments(' + (page - 1) + ')" ' + (page <= 1 ? 'disabled' : '') + '>&laquo; Prev</button>';
-                    var maxPage = Math.min(data.total_pages, 10);
-                    for (var p = 1; p <= maxPage; p++) {
+                    var startPage = Math.max(1, page - 3);
+                    var endPage = Math.min(data.total_pages, page + 3);
+                    for (var p = startPage; p <= endPage; p++) {
                         html += '<button class="page-btn ' + (p === page ? 'active' : '') + '" onclick="loadJudgments(' + p + ')">' + p + '</button>';
                     }
                     html += '<button class="page-btn" onclick="loadJudgments(' + (page + 1) + ')" ' + (page >= data.total_pages ? 'disabled' : '') + '>Next &raquo;</button>';
+                    html += '<button class="page-btn" onclick="loadJudgments(' + data.total_pages + ')" ' + (page >= data.total_pages ? 'disabled' : '') + '>Last</button>';
+                    html += '<span style="font-size:12px;color:#6b6560;margin-left:8px">Page ' + page + ' of ' + data.total_pages + ' (' + data.total + ' results)</span>';
                     html += '</div>';
                 }
                 container.innerHTML = html;
@@ -548,7 +583,15 @@
         var score = document.getElementById("filterScore").value;
         var days = document.getElementById("filterDays").value;
         var search = document.getElementById("filterSearch").value;
-        var params = "days=" + days;
+        var dateFrom = document.getElementById("filterDateFrom").value;
+        var dateTo = document.getElementById("filterDateTo").value;
+        var params = "";
+        if (days === "custom") {
+            if (dateFrom) params += "date_from=" + dateFrom;
+            if (dateTo) params += (params ? "&" : "") + "date_to=" + dateTo;
+        } else {
+            params = "days=" + days;
+        }
         if (currentCategory) params += "&category=" + currentCategory;
         if (score) params += "&score=" + score;
         if (search) params += "&search=" + encodeURIComponent(search);
